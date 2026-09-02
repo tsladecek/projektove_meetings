@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 )
 
-func Infer(ctx context.Context, projektove Projektove, llm LLM, context, meeting string, users []ProjektoveUser) error {
+func Infer(ctx context.Context, db DB, projektove Projektove, llm LLM, generalContext, meeting string, users []ProjektoveUser) error {
 	projects, err := projektove.GetProjects(ctx)
 	if err != nil {
 		return fmt.Errorf("when listing projects: %w", err)
@@ -79,13 +80,20 @@ func Infer(ctx context.Context, projektove Projektove, llm LLM, context, meeting
 
 	Meeting notes:
 	%s
-	`, usersMarshalled, projectsMarshalled, context, meeting)
+	`, usersMarshalled, projectsMarshalled, generalContext, meeting)
 
-	response, err := llm.Infer(ctx, prompt)
+	var response string
+
+	defer func() {
+		db.StorePrompt(ctx, prompt, response, err)
+	}()
+
+	slog.Debug("Inferring...")
+	response, err = llm.Infer(ctx, prompt)
 	if err != nil {
 		return fmt.Errorf("when prompting the llm: %w", err)
 	}
+	slog.Debug("Inference done")
 
-	fmt.Printf("Response: \n%+v", response)
 	return nil
 }

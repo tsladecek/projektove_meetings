@@ -1,6 +1,9 @@
 package projektovemeeting
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type Projektove interface {
 	CreateIssue(ctx context.Context, obj ProjektoveIssueCreate) error
@@ -9,4 +12,15 @@ type Projektove interface {
 
 type LLM interface {
 	Infer(ctx context.Context, prompt string) (string, error)
+}
+
+type ProjectsCacheEntry struct {
+	Projects  []ProjektoveProject
+	FetchedAt time.Time
+}
+
+type DB interface {
+	StorePrompt(ctx context.Context, prompt string, result string, error error) error
+	UpdateProjectsCache(ctx context.Context, projects []ProjektoveProject) error
+	ListProjects(ctx context.Context) (ProjectsCacheEntry, error)
 }

@@ -4,22 +4,26 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 type ProjektoveAPI struct {
 	client  *Client
 	baseURL *url.URL
 	token   string
+	db      DB
 }
 
 type projektoveCreateBody struct {
 	Issue ProjektoveIssueCreate `json:"issue"`
 }
 
-func NewProjektoveAPI(baseURL, token string, client *Client) (Projektove, error) {
+func NewProjektoveAPI(baseURL, token string, client *Client, db DB) (Projektove, error) {
 	burl, err := url.Parse(baseURL)
 	if err != nil {
 		return ProjektoveAPI{}, fmt.Errorf("when parsing projektove url %q: %w", baseURL, err)
@@ -32,6 +36,7 @@ func NewProjektoveAPI(baseURL, token string, client *Client) (Projektove, error)
 		baseURL: burl,
 		token:   token,
 		client:  client,
+		db:      db,
 	}, nil
 }
 
@@ -65,6 +70,19 @@ type ResponseProjects struct {
 }
 
 func (p ProjektoveAPI) GetProjects(ctx context.Context) ([]ProjektoveProject, error) {
+	fromCache, err := p.db.ListProjects(ctx)
+	if err != nil {
+		if !errors.Is(err, ErrNoProjectsFound) {
+			return nil, fmt.Errorf("when loading projects from cache: %w", err)
+		}
+		slog.Debug("Projects not found in cache")
+	} else {
+		if time.Since(fromCache.FetchedAt) < time.Hour*48 {
+			return fromCache.Projects, nil
+		}
+		slog.Debug("Stale projects found in cache")
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL.JoinPath("projects.json").String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("when creating request: %w", err)
@@ -77,6 +95,14 @@ func (p ProjektoveAPI) GetProjects(ctx context.Context) ([]ProjektoveProject, er
 	if _, err := p.client.Do(req, &projects); err != nil {
 		return nil, fmt.Errorf("when fetching projects: %w", err)
 	}
+
+	go func() {
+		ctxStore, cancelStore := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancelStore()
+		if err := p.db.UpdateProjectsCache(ctxStore, projects.Projects); err != nil {
+			slog.Error("Received error when caching projects", "error", err.Error())
+		}
+	}()
 
 	return projects.Projects, nil
 }

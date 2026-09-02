@@ -40,12 +40,17 @@ func run() error {
 
 	client := projektovemeeting.NewClient()
 
-	projektove, err := projektovemeeting.NewProjektoveAPI(config.Projektove.URL, config.Projektove.Token, client)
+	db, err := projektovemeeting.NewDB(config.DB)
+	if err != nil {
+		return fmt.Errorf("when constructing db adapter: %w", err)
+	}
+
+	projektove, err := projektovemeeting.NewProjektoveAPI(config.Projektove.URL, config.Projektove.Token, client, db)
 	if err != nil {
 		return fmt.Errorf("when constructing projektove adapter: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	return projektovemeeting.Infer(ctx, projektove, llm, config.LLM.Context, string(meeting), config.Projektove.Users)
+	return projektovemeeting.Infer(ctx, db, projektove, llm, config.LLM.Context, string(meeting), config.Projektove.Users)
 }
