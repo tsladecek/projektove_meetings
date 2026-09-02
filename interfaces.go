@@ -45,6 +45,36 @@ type Prompt struct {
 	Context LLMContext
 }
 
+type IssueCreate struct {
+	PromptID     int
+	Subject      string
+	Description  string
+	ProjectID    int
+	StartDate    time.Time
+	DueDate      time.Time
+	AuthorID     int
+	AssignedToID int
+}
+type Issue struct {
+	ID           int
+	PromptID     int
+	Subject      string
+	Description  string
+	ProjectID    int
+	StartDate    time.Time
+	DueDate      time.Time
+	AuthorID     int
+	AssignedToID int
+}
+
+type IssueStatus string
+
+const (
+	IssueStatusCreated      IssueStatus = "created"
+	IssueStatusSubmitted    IssueStatus = "submitted"
+	IssueStatusSubmitFailed IssueStatus = "submit_failed"
+)
+
 type DB interface {
 	StorePrompt(ctx context.Context, obj PromptCreate) error
 	ListPrompts(ctx context.Context) ([]Prompt, error)
@@ -54,5 +84,9 @@ type DB interface {
 
 	GetContext(ctx context.Context, id int) (LLMContext, error)
 	ListContexts(ctx context.Context) ([]LLMContext, error)
-	AddContext(ctx context.Context, c LLMContextCreate) error
+	StoreContext(ctx context.Context, c LLMContextCreate) error
+
+	StoreIssue(ctx context.Context, issue IssueCreate) error
+	UpdateIssueStatus(ctx context.Context, id int, status IssueStatus) error
+	ListIssues(ctx context.Context, promptID int) ([]Issue, error)
 }

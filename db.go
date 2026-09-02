@@ -35,7 +35,21 @@ CREATE TABLE IF NOT EXISTS contexts (
 	id INTEGER PRIMARY KEY,
 	name TEXT,
 	context TEXT
-)
+);
+
+CREATE TABLE IF NOT EXISTS issues (
+	id INTEGER PRIMARY KEY,
+	prompt_id INTEGER,
+	FOREIGN KEY (prompt_id) REFERENCES prompts(id),
+	subject TEXT,
+	description TEXT,
+	project_id INT,
+	start_date TIMESTAMP,
+	due_date TIMESTAMP,
+	author_id INT,
+	assigned_to_id INT,
+	status ENUM("created", "submitted", "submit_failed")
+);
 `
 
 // NewDB connects to (or creates) the SQLite database and executes the migration.
@@ -160,7 +174,7 @@ func (s *DBSqlite) ListContexts(ctx context.Context) ([]LLMContext, error) {
 	return contexts, nil
 }
 
-func (s *DBSqlite) AddContext(ctx context.Context, c LLMContextCreate) error {
+func (s *DBSqlite) StoreContext(ctx context.Context, c LLMContextCreate) error {
 	_, execErr := s.db.ExecContext(ctx, "INSERT INTO contexts (context, name) VALUES (?, ?)", c.Context, c.Name)
 	if execErr != nil {
 		return fmt.Errorf("failed to insert context: %w", execErr)
@@ -176,4 +190,56 @@ func (s *DBSqlite) GetContext(ctx context.Context, id int) (LLMContext, error) {
 	}
 
 	return c, nil
+}
+
+func (s *DBSqlite) StoreIssue(ctx context.Context, issue IssueCreate) error {
+	query := `INSERT INTO issues (prompt_id, subject, description, project_id, start_date, due_date, author_id, assigned_to_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, execErr := s.db.ExecContext(ctx, query, issue.PromptID, issue.Subject, issue.Description, issue.ProjectID, issue.StartDate, issue.DueDate, issue.AuthorID, issue.AssignedToID, IssueStatusCreated)
+	if execErr != nil {
+		return fmt.Errorf("failed to store issue: %w", execErr)
+	}
+
+	return nil
+}
+
+func (s *DBSqlite) UpdateIssueStatus(ctx context.Context, id int, status IssueStatus) error {
+	query := `UPDATE issues SET status = ? WHERE id = ?`
+	result, execErr := s.db.ExecContext(ctx, query, status, id)
+	if execErr != nil {
+		return fmt.Errorf("failed to update issue status: %w", execErr)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("issue with id %d not found", id)
+	}
+
+	return nil
+}
+
+func (s *DBSqlite) ListIssues(ctx context.Context, promptID int) ([]Issue, error) {
+	issues := []Issue{}
+
+	rows, err := s.db.QueryContext(ctx, "SELECT id, prompt_id, subject, description, project_id, start_date, due_date, author_id, assigned_to_id FROM issues WHERE prompt_id = ?", promptID)
+	if err != nil {
+		return nil, fmt.Errorf("when listing issues: %w", err)
+	}
+
+	for rows.Next() {
+		i := Issue{}
+		if err := rows.Scan(&i.ID, &i.PromptID, &i.Subject, &i.Description, &i.ProjectID, &i.StartDate, &i.DueDate, &i.AuthorID, &i.AssignedToID); err != nil {
+			return nil, fmt.Errorf("when scanning results: %w", err)
+		}
+		issues = append(issues, i)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("when iterating over results: %w", err)
+	}
+
+	return issues, nil
 }
