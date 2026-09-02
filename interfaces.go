@@ -52,9 +52,22 @@ type IssueCreate struct {
 	ProjectID    int
 	StartDate    time.Time
 	DueDate      time.Time
-	AuthorID     int
+	AuthorID     *int
 	AssignedToID int
 }
+
+type IssueUpdate struct {
+	Subject      string
+	Description  string
+	ProjectID    int
+	StartDate    time.Time
+	DueDate      time.Time
+	AuthorID     *int
+	AssignedToID int
+	Status       IssueStatus
+	ProjektoveID *int
+}
+
 type Issue struct {
 	ID           int
 	PromptID     int
@@ -63,8 +76,10 @@ type Issue struct {
 	ProjectID    int
 	StartDate    time.Time
 	DueDate      time.Time
-	AuthorID     int
+	AuthorID     *int
 	AssignedToID int
+	ProjektoveID *int
+	Status       IssueStatus
 }
 
 type IssueStatus string
@@ -76,7 +91,7 @@ const (
 )
 
 type DB interface {
-	StorePrompt(ctx context.Context, obj PromptCreate) error
+	StorePrompt(ctx context.Context, obj PromptCreate) (int, error)
 	ListPrompts(ctx context.Context) ([]Prompt, error)
 
 	UpdateProjectsCache(ctx context.Context, projects []ProjektoveProject) error
@@ -84,9 +99,9 @@ type DB interface {
 
 	GetContext(ctx context.Context, id int) (LLMContext, error)
 	ListContexts(ctx context.Context) ([]LLMContext, error)
-	StoreContext(ctx context.Context, c LLMContextCreate) error
+	StoreContext(ctx context.Context, c LLMContextCreate) (int, error)
 
-	StoreIssue(ctx context.Context, issue IssueCreate) error
+	StoreIssue(ctx context.Context, issue IssueCreate) (int, error)
 	UpdateIssueStatus(ctx context.Context, id int, status IssueStatus) error
 	ListIssues(ctx context.Context, promptID int) ([]Issue, error)
 }

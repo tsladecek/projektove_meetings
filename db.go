@@ -18,36 +18,36 @@ type DBSqlite struct {
 const migration = `
 CREATE TABLE IF NOT EXISTS prompts (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	prompt TEXT,
+	prompt TEXT NOT NULL,
 	result TEXT,
 	error TEXT,
-	context_id INT,
+	context_id INT NOT NULL,
 	FOREIGN KEY (context_id) REFERENCES contexts(id)
 );
 
 CREATE TABLE IF NOT EXISTS projects (
 	id INTEGER PRIMARY KEY,
-	projects TEXT,
-	fetched_at TIMESTAMP
+	projects TEXT NOT NULL,
+	fetched_at TIMESTAMP NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS contexts (
 	id INTEGER PRIMARY KEY,
 	name TEXT,
-	context TEXT
+	context TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS issues (
 	id INTEGER PRIMARY KEY,
 	prompt_id INTEGER,
 	FOREIGN KEY (prompt_id) REFERENCES prompts(id),
-	subject TEXT,
-	description TEXT,
-	project_id INT,
-	start_date TIMESTAMP,
+	subject TEXT NOT NULL,
+	description TEXT NOT NULL,
+	project_id INT NOT NULL,
+	start_date TIMESTAMP NOT NULL,
 	due_date TIMESTAMP,
 	author_id INT,
-	assigned_to_id INT,
+	assigned_to_id INT NOT NULL,
 	status ENUM("created", "submitted", "submit_failed")
 );
 `
@@ -72,19 +72,24 @@ func NewDB(path string) (DB, error) {
 	return &DBSqlite{db: db}, nil
 }
 
-func (s *DBSqlite) StorePrompt(ctx context.Context, obj PromptCreate) error {
+func (s *DBSqlite) StorePrompt(ctx context.Context, obj PromptCreate) (int, error) {
 	var errStr string
 	if obj.Error != nil {
 		errStr = obj.Error.Error()
 	}
 
 	query := `INSERT INTO prompts (prompt, result, error, context_id) VALUES (?, ?, ?, ?)`
-	_, execErr := s.db.ExecContext(ctx, query, obj.Prompt, obj.Result, errStr, obj.ContextID)
+	result, execErr := s.db.ExecContext(ctx, query, obj.Prompt, obj.Result, errStr, obj.ContextID)
 	if execErr != nil {
-		return fmt.Errorf("failed to store prompt: %w", execErr)
+		return 0, fmt.Errorf("failed to store prompt: %w", execErr)
 	}
 
-	return nil
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last insert id: %w", err)
+	}
+
+	return int(id), nil
 }
 
 func (s *DBSqlite) ListPrompts(ctx context.Context) ([]Prompt, error) {
@@ -174,13 +179,18 @@ func (s *DBSqlite) ListContexts(ctx context.Context) ([]LLMContext, error) {
 	return contexts, nil
 }
 
-func (s *DBSqlite) StoreContext(ctx context.Context, c LLMContextCreate) error {
-	_, execErr := s.db.ExecContext(ctx, "INSERT INTO contexts (context, name) VALUES (?, ?)", c.Context, c.Name)
+func (s *DBSqlite) StoreContext(ctx context.Context, c LLMContextCreate) (int, error) {
+	result, execErr := s.db.ExecContext(ctx, "INSERT INTO contexts (context, name) VALUES (?, ?)", c.Context, c.Name)
 	if execErr != nil {
-		return fmt.Errorf("failed to insert context: %w", execErr)
+		return 0, fmt.Errorf("failed to insert context: %w", execErr)
 	}
 
-	return nil
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last insert id: %w", err)
+	}
+
+	return int(id), nil
 }
 
 func (s *DBSqlite) GetContext(ctx context.Context, id int) (LLMContext, error) {
@@ -192,21 +202,26 @@ func (s *DBSqlite) GetContext(ctx context.Context, id int) (LLMContext, error) {
 	return c, nil
 }
 
-func (s *DBSqlite) StoreIssue(ctx context.Context, issue IssueCreate) error {
+func (s *DBSqlite) StoreIssue(ctx context.Context, issue IssueCreate) (int, error) {
 	query := `INSERT INTO issues (prompt_id, subject, description, project_id, start_date, due_date, author_id, assigned_to_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, execErr := s.db.ExecContext(ctx, query, issue.PromptID, issue.Subject, issue.Description, issue.ProjectID, issue.StartDate, issue.DueDate, issue.AuthorID, issue.AssignedToID, IssueStatusCreated)
+	result, execErr := s.db.ExecContext(ctx, query, issue.PromptID, issue.Subject, issue.Description, issue.ProjectID, issue.StartDate, issue.DueDate, issue.AuthorID, issue.AssignedToID, IssueStatusCreated)
 	if execErr != nil {
-		return fmt.Errorf("failed to store issue: %w", execErr)
+		return 0, fmt.Errorf("failed to store issue: %w", execErr)
 	}
 
-	return nil
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last insert id: %w", err)
+	}
+
+	return int(id), nil
 }
 
-func (s *DBSqlite) UpdateIssueStatus(ctx context.Context, id int, status IssueStatus) error {
-	query := `UPDATE issues SET status = ? WHERE id = ?`
-	result, execErr := s.db.ExecContext(ctx, query, status, id)
+func (s *DBSqlite) UpdateIssue(ctx context.Context, id int, obj IssueUpdate) error {
+	query := `UPDATE issues SET status = ?, subject = ?, description = ?, project_id = ?, start_date = ?, due_date = ?, author_id = ?, assigned_to_id = ?, projektove_id = ? WHERE id = ?`
+	result, execErr := s.db.ExecContext(ctx, query, obj.Status, obj.Subject, obj.Description, obj.ProjectID, obj.StartDate, obj.DueDate, obj.AuthorID, obj.AssignedToID, obj.ProjektoveID, id)
 	if execErr != nil {
-		return fmt.Errorf("failed to update issue status: %w", execErr)
+		return fmt.Errorf("failed to update issue: %w", execErr)
 	}
 
 	rowsAffected, err := result.RowsAffected()

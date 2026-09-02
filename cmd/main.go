@@ -55,7 +55,7 @@ func run() error {
 
 	controller := projektovemeeting.Controller{DB: db, Projektove: projektove, LLM: llm}
 
-	if err := db.StoreContext(ctx, projektovemeeting.LLMContextCreate{Name: "c1", Context: config.LLM.Context}); err != nil {
+	if _, err := db.StoreContext(ctx, projektovemeeting.LLMContextCreate{Name: "c1", Context: config.LLM.Context}); err != nil {
 		return fmt.Errorf("when creating context: %w", err)
 	}
 

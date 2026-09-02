@@ -87,7 +87,7 @@ func (c Controller) Infer(ctx context.Context, contextID int, meeting string, us
 	var response string
 
 	defer func() {
-		c.DB.StorePrompt(ctx, PromptCreate{Prompt: prompt, Result: response, Error: err, ContextID: contextID})
+		_, _ = c.DB.StorePrompt(ctx, PromptCreate{Prompt: prompt, Result: response, Error: err, ContextID: contextID})
 	}()
 
 	slog.Debug("Inferring...")
