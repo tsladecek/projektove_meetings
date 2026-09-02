@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS prompts (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	prompt TEXT,
 	result TEXT,
-	error TEXT
+	error TEXT,
+	context_id INT,
+	FOREIGN KEY (context_id) REFERENCES contexts(id)
 );
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -28,6 +30,12 @@ CREATE TABLE IF NOT EXISTS projects (
 	projects TEXT,
 	fetched_at TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS contexts (
+	id INTEGER PRIMARY KEY,
+	name TEXT,
+	context TEXT
+)
 `
 
 // NewDB connects to (or creates) the SQLite database and executes the migration.
@@ -50,19 +58,42 @@ func NewDB(path string) (DB, error) {
 	return &DBSqlite{db: db}, nil
 }
 
-func (s *DBSqlite) StorePrompt(ctx context.Context, prompt string, result string, err error) error {
+func (s *DBSqlite) StorePrompt(ctx context.Context, obj PromptCreate) error {
 	var errStr string
-	if err != nil {
-		errStr = err.Error()
+	if obj.Error != nil {
+		errStr = obj.Error.Error()
 	}
 
-	query := `INSERT INTO prompts (prompt, result, error) VALUES (?, ?, ?)`
-	_, execErr := s.db.ExecContext(ctx, query, prompt, result, errStr)
+	query := `INSERT INTO prompts (prompt, result, error, context_id) VALUES (?, ?, ?, ?)`
+	_, execErr := s.db.ExecContext(ctx, query, obj.Prompt, obj.Result, errStr, obj.ContextID)
 	if execErr != nil {
 		return fmt.Errorf("failed to store prompt: %w", execErr)
 	}
 
 	return nil
+}
+
+func (s *DBSqlite) ListPrompts(ctx context.Context) ([]Prompt, error) {
+	prompts := []Prompt{}
+
+	rows, err := s.db.QueryContext(ctx, "SELECT p.id, p.prompt, p.result, p.error, c.id, c.name, c.context FROM prompts p join contexts c on p.context_id = c.id")
+	if err != nil {
+		return nil, fmt.Errorf("when listing prompts")
+	}
+
+	for rows.Next() {
+		p := Prompt{}
+		if err := rows.Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Context.ID, &p.Context.Name, &p.Context.Context); err != nil {
+			return nil, fmt.Errorf("when scanning results: %w", err)
+		}
+		prompts = append(prompts, p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("when iterating over results: %w", err)
+	}
+
+	return prompts, nil
 }
 
 func (s *DBSqlite) UpdateProjectsCache(ctx context.Context, projects []ProjektoveProject) error {
@@ -104,4 +135,45 @@ func (s *DBSqlite) ListProjects(ctx context.Context) (ProjectsCacheEntry, error)
 	}
 
 	return entry, nil
+}
+
+func (s *DBSqlite) ListContexts(ctx context.Context) ([]LLMContext, error) {
+	contexts := []LLMContext{}
+
+	rows, err := s.db.QueryContext(ctx, "SELECT id, name, context FROM contexts")
+	if err != nil {
+		return nil, fmt.Errorf("when listing contexts")
+	}
+
+	for rows.Next() {
+		c := LLMContext{}
+		if err := rows.Scan(&c.ID, &c.Name, &c.Context); err != nil {
+			return nil, fmt.Errorf("when scanning results: %w", err)
+		}
+		contexts = append(contexts, c)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("when iterating over results: %w", err)
+	}
+
+	return contexts, nil
+}
+
+func (s *DBSqlite) AddContext(ctx context.Context, c LLMContextCreate) error {
+	_, execErr := s.db.ExecContext(ctx, "INSERT INTO contexts (context, name) VALUES (?, ?)", c.Context, c.Name)
+	if execErr != nil {
+		return fmt.Errorf("failed to insert context: %w", execErr)
+	}
+
+	return nil
+}
+
+func (s *DBSqlite) GetContext(ctx context.Context, id int) (LLMContext, error) {
+	c := LLMContext{}
+	if err := s.db.QueryRowContext(ctx, "SELECT id, name, context from contexts WHERE id = ?", id).Scan(&c.ID, &c.Name, &c.Context); err != nil {
+		return LLMContext{}, fmt.Errorf("when fetching context: %w", err)
+	}
+
+	return c, nil
 }

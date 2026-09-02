@@ -52,5 +52,18 @@ func run() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	return projektovemeeting.Infer(ctx, db, projektove, llm, config.LLM.Context, string(meeting), config.Projektove.Users)
+
+	controller := projektovemeeting.Controller{DB: db, Projektove: projektove, LLM: llm}
+
+	if err := db.AddContext(ctx, projektovemeeting.LLMContextCreate{Name: "c1", Context: config.LLM.Context}); err != nil {
+		return fmt.Errorf("when creating context: %w", err)
+	}
+
+	issues, err := controller.Infer(ctx, 1, string(meeting), config.Projektove.Users)
+	if err != nil {
+		return fmt.Errorf("when running issues inference: %w", err)
+	}
+
+	fmt.Printf("ISSUES:\n%+v", issues)
+	return nil
 }
