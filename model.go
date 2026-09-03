@@ -21,6 +21,21 @@ const (
 	ProjektoveStatusWaitingDistributorSide
 )
 
+type IssueParent string
+
+const (
+	IssueParentPrompt IssueParent = "prompt"
+	IssueParentBatch  IssueParent = "batch"
+)
+
+type IssueStatus string
+
+const (
+	IssueStatusCreated      IssueStatus = "created"
+	IssueStatusSubmitted    IssueStatus = "submitted"
+	IssueStatusSubmitFailed IssueStatus = "submit_failed"
+)
+
 type ProjektoveProject struct {
 	ID          int    `json:"id"`
 	Name        string `json:"name"`

@@ -12,6 +12,7 @@ import (
 type Config struct {
 	DB         string           `toml:"db" env:"DB" description:"name of the sqlite database for storing cache and prompt history" env-default:"db.sqlite"`
 	Projektove ConfigProjektove `toml:"projektove" env-prefix:"PROJEKTOVE_" env-required:"true"`
+	OIDC       ConfigOIDC       `toml:"oidc" env-prefix:"OIDC_"`
 	LLM        ConfigLLM        `toml:"llm" env-prefix:"LLM_" env-required:"true"`
 	Logging    ConfigLogging    `toml:"logging" env-prefix:"LOGGING_"`
 }
@@ -20,6 +21,11 @@ type ProjektoveUsers []ProjektoveUser
 
 type ConfigLogging struct {
 	Level string `toml:"level" env:"LEVEL" env-default:"info"`
+}
+
+type ConfigOIDC struct {
+	Issuer   string `toml:"issuer" env:"ISSUER"`
+	ClientID string `toml:"client_id" env:"CLIENT_ID"`
 }
 
 type ConfigProjektove struct {

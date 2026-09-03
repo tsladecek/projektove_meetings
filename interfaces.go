@@ -2,7 +2,6 @@ package projektovemeeting
 
 import (
 	"context"
-	"time"
 )
 
 type Projektove interface {
@@ -13,88 +12,6 @@ type Projektove interface {
 type LLM interface {
 	Infer(ctx context.Context, prompt string) (string, error)
 }
-
-type ProjectsCacheEntry struct {
-	Projects  []ProjektoveProject
-	FetchedAt time.Time
-}
-
-type LLMContextCreate struct {
-	Context string
-	Name    string
-}
-
-type PromptCreate struct {
-	Prompt    string
-	Result    string
-	Error     error
-	ContextID int
-}
-
-type IssueParent string
-
-const (
-	IssueParentPrompt IssueParent = "prompt"
-	IssueParentBatch  IssueParent = "batch"
-)
-
-type IssueCreate struct {
-	Parent       IssueParent `json:"parent"`
-	ParentID     int         `json:"parent_id"`
-	Subject      string      `json:"subject"`
-	Description  string      `json:"description"`
-	ProjectID    int         `json:"project_id"`
-	StartDate    time.Time   `json:"start_date"`
-	DueDate      time.Time   `json:"due_date"`
-	AssignedToID int         `json:"assigned_to_id"`
-}
-
-func (i IssueCreate) ToDomain(id int) Issue {
-	return Issue{
-		ID:           id,
-		Parent:       i.Parent,
-		ParentID:     i.ParentID,
-		Subject:      i.Subject,
-		Description:  i.Description,
-		ProjectID:    i.ProjectID,
-		StartDate:    i.StartDate,
-		DueDate:      i.DueDate,
-		AssignedToID: i.AssignedToID,
-		Status:       IssueStatusCreated,
-	}
-
-}
-
-type IssueUpdate struct {
-	Subject      string
-	Description  string
-	ProjectID    int
-	StartDate    time.Time
-	DueDate      time.Time
-	AssignedToID int
-	Status       IssueStatus
-	ProjektoveID *int
-}
-
-type UserCreate struct {
-	Email           string
-	ProjektoveToken string
-	Models          []LLMModel
-}
-
-type UserUpdate struct {
-	ProjektoveToken string
-	UpdateModels    bool
-	Models          []LLMModel
-}
-
-type IssueStatus string
-
-const (
-	IssueStatusCreated      IssueStatus = "created"
-	IssueStatusSubmitted    IssueStatus = "submitted"
-	IssueStatusSubmitFailed IssueStatus = "submit_failed"
-)
 
 type Repository interface {
 	StorePrompt(ctx context.Context, user User, obj PromptCreate) (int, error)
@@ -114,4 +31,8 @@ type Repository interface {
 	GetUser(ctx context.Context, email string) (User, error)
 	StoreUser(ctx context.Context, obj UserCreate) (int, error)
 	UpdateUser(ctx context.Context, user User, obj UserUpdate) error
+}
+
+type Auth interface {
+	Authenticate(ctx context.Context, token string) (User, error)
 }
