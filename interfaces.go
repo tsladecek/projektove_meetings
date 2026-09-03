@@ -19,12 +19,6 @@ type ProjectsCacheEntry struct {
 	FetchedAt time.Time
 }
 
-type LLMContext struct {
-	ID      int // not specified when creating
-	Context string
-	Name    string
-}
-
 type LLMContextCreate struct {
 	Context string
 	Name    string
@@ -35,14 +29,6 @@ type PromptCreate struct {
 	Result    string
 	Error     error
 	ContextID int
-}
-
-type Prompt struct {
-	ID      string // not specified when creating
-	Prompt  string
-	Result  string
-	Error   error
-	Context LLMContext
 }
 
 type IssueParent string
@@ -98,6 +84,7 @@ type UserCreate struct {
 
 type UserUpdate struct {
 	ProjektoveToken string
+	UpdateModels    bool
 	Models          []LLMModel
 }
 
@@ -121,7 +108,7 @@ type Repository interface {
 	StoreContext(ctx context.Context, user User, c LLMContextCreate) (int, error)
 
 	StoreIssue(ctx context.Context, user User, issue IssueCreate) (int, error)
-	UpdateIssue(ctx context.Context, user User, id int, obj IssueUpdate) error
+	UpdateIssue(ctx context.Context, user User, parent IssueParent, parentID int, id int, obj IssueUpdate) error
 	ListIssues(ctx context.Context, user User, parent IssueParent, parentID int) ([]Issue, error)
 
 	GetUser(ctx context.Context, email string) (User, error)

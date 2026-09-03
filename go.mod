@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	github.com/ilyakaznacheev/cleanenv v1.5.0
+	github.com/stretchr/testify v1.10.0
 	github.com/tmc/langchaingo v0.1.14
 	modernc.org/sqlite v1.57.0
 )
@@ -19,6 +20,7 @@ require (
 	cloud.google.com/go/longrunning v0.6.2 // indirect
 	cloud.google.com/go/vertexai v0.12.0 // indirect
 	github.com/BurntSushi/toml v1.2.1 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -33,6 +35,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pkoukk/tiktoken-go v0.1.6 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.54.0 // indirect

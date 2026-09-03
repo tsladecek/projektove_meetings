@@ -98,3 +98,17 @@ type Issue struct {
 	ProjektoveID *int
 	Status       IssueStatus
 }
+
+type Prompt struct {
+	ID      string
+	Prompt  string
+	Result  string
+	Error   string
+	Context LLMContext
+}
+
+type LLMContext struct {
+	ID      int
+	Context string
+	Name    string
+}

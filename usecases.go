@@ -84,7 +84,7 @@ func (c Controller) Infer(ctx context.Context, user User, contextID int, meeting
 
 	Meeting notes:
 	%s
-	`, usersMarshalled, projectsMarshalled, generalContext, meeting)
+	`, usersMarshalled, projectsMarshalled, generalContext.Context, meeting)
 
 	issues := []Issue{}
 
