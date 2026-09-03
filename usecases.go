@@ -8,12 +8,13 @@ import (
 )
 
 type Controller struct {
-	DB         DB
+	TxProvider TxProvider
+	Repository Repository
 	Projektove Projektove
 	LLM        LLM
 }
 
-func (c Controller) Infer(ctx context.Context, contextID int, meeting string, users []ProjektoveUser) ([]ProjektoveIssueCreate, error) {
+func (c Controller) Infer(ctx context.Context, user User, contextID int, meeting string, users []ProjektoveUser) ([]ProjektoveIssueCreate, error) {
 	projects, err := c.Projektove.GetProjects(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("when listing projects: %w", err)
@@ -28,7 +29,7 @@ func (c Controller) Infer(ctx context.Context, contextID int, meeting string, us
 		return nil, fmt.Errorf("when encoding users")
 	}
 
-	generalContext, err := c.DB.GetContext(ctx, contextID)
+	generalContext, err := c.Repository.GetContext(ctx, user, contextID)
 	if err != nil {
 		return nil, fmt.Errorf("when fetching context %d", contextID)
 	}
@@ -86,9 +87,10 @@ func (c Controller) Infer(ctx context.Context, contextID int, meeting string, us
 
 	var response string
 
-	defer func() {
-		_, _ = c.DB.StorePrompt(ctx, PromptCreate{Prompt: prompt, Result: response, Error: err, ContextID: contextID})
-	}()
+	// todo: not in defer
+	// defer func() {
+	// 	_, _ = c.Repository.StorePrompt(ctx, PromptCreate{Prompt: prompt, Result: response, Error: err, ContextID: contextID})
+	// }()
 
 	slog.Debug("Inferring...")
 	response, err = c.LLM.Infer(ctx, prompt)

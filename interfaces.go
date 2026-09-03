@@ -6,7 +6,7 @@ import (
 )
 
 type Projektove interface {
-	CreateIssue(ctx context.Context, obj ProjektoveIssueCreate) error
+	CreateIssue(ctx context.Context, obj ProjektoveIssueCreate) (ProjektoveIssue, error)
 	GetProjects(ctx context.Context) ([]ProjektoveProject, error)
 }
 
@@ -45,14 +45,21 @@ type Prompt struct {
 	Context LLMContext
 }
 
+type IssueParent string
+
+const (
+	IssueParentPrompt IssueParent = "prompt"
+	IssueParentBatch  IssueParent = "batch"
+)
+
 type IssueCreate struct {
-	PromptID     int
+	Parent       IssueParent
+	ParentID     int
 	Subject      string
 	Description  string
 	ProjectID    int
 	StartDate    time.Time
 	DueDate      time.Time
-	AuthorID     *int
 	AssignedToID int
 }
 
@@ -62,7 +69,6 @@ type IssueUpdate struct {
 	ProjectID    int
 	StartDate    time.Time
 	DueDate      time.Time
-	AuthorID     *int
 	AssignedToID int
 	Status       IssueStatus
 	ProjektoveID *int
@@ -70,16 +76,27 @@ type IssueUpdate struct {
 
 type Issue struct {
 	ID           int
-	PromptID     int
+	Parent       IssueParent
+	ParentID     int
 	Subject      string
 	Description  string
 	ProjectID    int
 	StartDate    time.Time
 	DueDate      time.Time
-	AuthorID     *int
 	AssignedToID int
 	ProjektoveID *int
 	Status       IssueStatus
+}
+
+type UserCreate struct {
+	Email           string
+	ProjektoveToken string
+	Models          []LLMModel
+}
+
+type UserUpdate struct {
+	ProjektoveToken string
+	Models          []LLMModel
 }
 
 type IssueStatus string
@@ -90,18 +107,22 @@ const (
 	IssueStatusSubmitFailed IssueStatus = "submit_failed"
 )
 
-type DB interface {
-	StorePrompt(ctx context.Context, obj PromptCreate) (int, error)
-	ListPrompts(ctx context.Context) ([]Prompt, error)
+type Repository interface {
+	StorePrompt(ctx context.Context, user User, obj PromptCreate) (int, error)
+	ListPrompts(ctx context.Context, user User) ([]Prompt, error)
 
-	UpdateProjectsCache(ctx context.Context, projects []ProjektoveProject) error
-	ListProjects(ctx context.Context) (ProjectsCacheEntry, error)
+	UpdateProjectsCache(ctx context.Context, user User, projects []ProjektoveProject) error
+	ListProjects(ctx context.Context, user User) (ProjectsCacheEntry, error)
 
-	GetContext(ctx context.Context, id int) (LLMContext, error)
-	ListContexts(ctx context.Context) ([]LLMContext, error)
-	StoreContext(ctx context.Context, c LLMContextCreate) (int, error)
+	GetContext(ctx context.Context, user User, id int) (LLMContext, error)
+	ListContexts(ctx context.Context, user User) ([]LLMContext, error)
+	StoreContext(ctx context.Context, user User, c LLMContextCreate) (int, error)
 
-	StoreIssue(ctx context.Context, issue IssueCreate) (int, error)
-	UpdateIssueStatus(ctx context.Context, id int, status IssueStatus) error
-	ListIssues(ctx context.Context, promptID int) ([]Issue, error)
+	StoreIssue(ctx context.Context, user User, issue IssueCreate) (int, error)
+	UpdateIssue(ctx context.Context, user User, id int, obj IssueUpdate) error
+	ListIssues(ctx context.Context, user User, promptID int) ([]Issue, error)
+
+	GetUser(ctx context.Context, email string) (User, error)
+	StoreUser(ctx context.Context, obj UserCreate) (int, error)
+	UpdateUser(ctx context.Context, user User, obj UserUpdate) error
 }

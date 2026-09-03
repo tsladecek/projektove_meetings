@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -40,12 +41,33 @@ func run() error {
 
 	client := projektovemeeting.NewClient()
 
-	db, err := projektovemeeting.NewDB(config.DB)
+	txp, repo, err := projektovemeeting.NewRepository(config.DB)
 	if err != nil {
-		return fmt.Errorf("when constructing db adapter: %w", err)
+		return fmt.Errorf("when constructing data repository adapter: %w", err)
+	}
+	_ = txp
+
+	userCreate := projektovemeeting.UserCreate{Email: "user@user.com", ProjektoveToken: config.Projektove.Token, Models: []projektovemeeting.LLMModel{{Provider: projektovemeeting.LLMProvider(config.LLM.Provider), Model: config.LLM.Model, Token: config.LLM.Token}}}
+	repo.GetUser(context.Background(), "")
+
+	user, err := repo.GetUser(context.Background(), userCreate.Email)
+	if err != nil {
+		if !errors.Is(err, projektovemeeting.ErrUserNotFound) {
+			return fmt.Errorf("when fetching user: %w", err)
+		}
+
+		_, err = repo.StoreUser(context.Background(), userCreate)
+		if err != nil {
+			return fmt.Errorf("when storing user: %w", err)
+		}
+
+		user, err = repo.GetUser(context.Background(), userCreate.Email)
+		if err != nil {
+			return fmt.Errorf("when fetching user: %w", err)
+		}
 	}
 
-	projektove, err := projektovemeeting.NewProjektoveAPI(config.Projektove.URL, config.Projektove.Token, client, db)
+	projektove, err := projektovemeeting.NewProjektoveAPI(config.Projektove.URL, config.Projektove.Token, client, repo)
 	if err != nil {
 		return fmt.Errorf("when constructing projektove adapter: %w", err)
 	}
@@ -53,13 +75,13 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	controller := projektovemeeting.Controller{DB: db, Projektove: projektove, LLM: llm}
+	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, LLM: llm}
 
-	if _, err := db.StoreContext(ctx, projektovemeeting.LLMContextCreate{Name: "c1", Context: config.LLM.Context}); err != nil {
+	if _, err := repo.StoreContext(ctx, user, projektovemeeting.LLMContextCreate{Name: "c1", Context: config.LLM.Context}); err != nil {
 		return fmt.Errorf("when creating context: %w", err)
 	}
 
-	issues, err := controller.Infer(ctx, 1, string(meeting), config.Projektove.Users)
+	issues, err := controller.Infer(ctx, user, 1, string(meeting), config.Projektove.Users)
 	if err != nil {
 		return fmt.Errorf("when running issues inference: %w", err)
 	}

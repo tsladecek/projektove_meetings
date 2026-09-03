@@ -70,3 +70,17 @@ type ProjektoveIssueCreate struct {
 	AuthorID     int       `json:"author_id"`
 	AssignedToID int       `json:"assigned_to_id"`
 }
+
+type LLMModel struct {
+	Provider LLMProvider
+	Model    string
+	Token    string
+}
+
+type User struct {
+	ID              int
+	IsAdmin         bool
+	Email           string
+	ProjektoveToken string
+	LLMModels       []LLMModel
+}

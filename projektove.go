@@ -16,14 +16,14 @@ type ProjektoveAPI struct {
 	client  *Client
 	baseURL *url.URL
 	token   string
-	db      DB
+	db      Repository
 }
 
 type projektoveCreateBody struct {
 	Issue ProjektoveIssueCreate `json:"issue"`
 }
 
-func NewProjektoveAPI(baseURL, token string, client *Client, db DB) (Projektove, error) {
+func NewProjektoveAPI(baseURL, token string, client *Client, db Repository) (Projektove, error) {
 	burl, err := url.Parse(baseURL)
 	if err != nil {
 		return ProjektoveAPI{}, fmt.Errorf("when parsing projektove url %q: %w", baseURL, err)
@@ -40,7 +40,11 @@ func NewProjektoveAPI(baseURL, token string, client *Client, db DB) (Projektove,
 	}, nil
 }
 
-func (p ProjektoveAPI) CreateIssue(ctx context.Context, obj ProjektoveIssueCreate) error {
+type ResponseCreateIssue struct {
+	Issue ProjektoveIssue `json:"issue"`
+}
+
+func (p ProjektoveAPI) CreateIssue(ctx context.Context, obj ProjektoveIssueCreate) (ProjektoveIssue, error) {
 	u := p.baseURL.JoinPath("issues.json").String()
 
 	body := projektoveCreateBody{
@@ -48,21 +52,23 @@ func (p ProjektoveAPI) CreateIssue(ctx context.Context, obj ProjektoveIssueCreat
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return fmt.Errorf("marshal update body: %w", err)
+		return ProjektoveIssue{}, fmt.Errorf("marshal update body: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("when creating request: %w", err)
+		return ProjektoveIssue{}, fmt.Errorf("when creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Authorization", p.token)
 
-	if _, err := p.client.Do(req, nil); err != nil {
-		return fmt.Errorf("when creating issue :%w", err)
+	response := ResponseCreateIssue{}
+
+	if _, err := p.client.Do(req, &response); err != nil {
+		return ProjektoveIssue{}, fmt.Errorf("when creating issue :%w", err)
 	}
 
-	return nil
+	return response.Issue, nil
 }
 
 type ResponseProjects struct {

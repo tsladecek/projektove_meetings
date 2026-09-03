@@ -11,75 +11,150 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type DBSqlite struct {
+type DBExecutor interface {
+	// ExecContext executes a query without returning any rows. The args are for any placeholder parameters in the query.
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	// PrepareContext creates a prepared statement for later queries or executions. Multiple queries or executions may be run concurrently from the returned statement. The caller must call the statement's *Stmt.Close method when the statement is no longer needed.
+	// The provided context is used for the preparation of the statement, not for the execution of the statement.
+	PrepareContext(ctx context.Context, query string) (*sql.Stmt, error)
+	// QueryContext executes a query that returns rows, typically a SELECT. The args are for any placeholder parameters in the query.
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	// QueryRowContext executes a query that is expected to return at most one row. QueryRowContext always returns a non-nil value. Errors are deferred until Row's Scan method is called. If the query selects no rows, the *Row.Scan will return ErrNoRows. Otherwise, *Row.Scan scans the first selected row and discards the rest.
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func RunInTx(db *sql.DB, fn func(tx *sql.Tx) error) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	err = fn(tx)
+	if err == nil {
+		return tx.Commit()
+	}
+
+	rollbackErr := tx.Rollback()
+	if rollbackErr != nil {
+		return errors.Join(err, rollbackErr)
+	}
+
+	return err
+}
+
+type TxProvider struct {
 	db *sql.DB
 }
 
+type RepositorySqlite struct {
+	db DBExecutor
+}
+
+func (txp TxProvider) Transact(tf func(db Repository) error) error {
+	return RunInTx(txp.db, func(tx *sql.Tx) error {
+		return tf(&RepositorySqlite{db: tx})
+	})
+}
+
 const migration = `
+CREATE TABLE IF NOT EXISTS users (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	email string NOT NULL,
+	is_admin boolean NOT NULL,
+	projektove_token string NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS providers (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id INTEGER NOT NULL,
+	FOREIGN KEY (user_id) REFERENCES users(id),
+	provider string NOT NULL,
+	model string NOT NULL,
+	token string NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS prompts (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	prompt TEXT NOT NULL,
 	result TEXT,
 	error TEXT,
 	context_id INT NOT NULL,
+	user_id INT NOT NULL,
+	FOREIGN KEY (user_id) REFERENCES users(id),
 	FOREIGN KEY (context_id) REFERENCES contexts(id)
 );
 
 CREATE TABLE IF NOT EXISTS projects (
 	id INTEGER PRIMARY KEY,
 	projects TEXT NOT NULL,
-	fetched_at TIMESTAMP NOT NULL
+	fetched_at TIMESTAMP NOT NULL,
+	user_id INT NOT NULL,
+	FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS contexts (
 	id INTEGER PRIMARY KEY,
 	name TEXT,
-	context TEXT NOT NULL
+	context TEXT NOT NULL,
+	user_id INT NOT NULL,
+	FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS issue_batches (
+	id INTEGER PRIMARY KEY,
+	file_content blob
 );
 
 CREATE TABLE IF NOT EXISTS issues (
 	id INTEGER PRIMARY KEY,
-	prompt_id INTEGER,
-	FOREIGN KEY (prompt_id) REFERENCES prompts(id),
 	subject TEXT NOT NULL,
 	description TEXT NOT NULL,
 	project_id INT NOT NULL,
 	start_date TIMESTAMP NOT NULL,
 	due_date TIMESTAMP,
-	author_id INT,
 	assigned_to_id INT NOT NULL,
-	status ENUM("created", "submitted", "submit_failed")
+	status ENUM("created", "submitted", "submit_failed"),
+	projektove_id INT,
+
+	-- weak reference to either prompts or issue_batches
+	parent ENUM("prompt", "batch") NOT NULL,
+	parent_id INTEGER, 
 );
+
+INSERT INTO users (email, is_admin, projektove_token) (admin, true, "");
 `
 
-// NewDB connects to (or creates) the SQLite database and executes the migration.
-func NewDB(path string) (DB, error) {
+// NewRepository connects to (or creates) the SQLite database and executes the migration.
+func NewRepository(path string) (*TxProvider, Repository, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
+		return nil, nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
 
 	if err := db.Ping(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to ping sqlite database: %w", err)
+		return nil, nil, fmt.Errorf("failed to ping sqlite database: %w", err)
 	}
 
 	if _, err := db.Exec(migration); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to run migrations: %w", err)
+		return nil, nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
-	return &DBSqlite{db: db}, nil
+	repo := &RepositorySqlite{db: db}
+	txp := &TxProvider{db: db}
+
+	return txp, repo, nil
 }
 
-func (s *DBSqlite) StorePrompt(ctx context.Context, obj PromptCreate) (int, error) {
+func (r *RepositorySqlite) StorePrompt(ctx context.Context, user User, obj PromptCreate) (int, error) {
 	var errStr string
 	if obj.Error != nil {
 		errStr = obj.Error.Error()
 	}
 
-	query := `INSERT INTO prompts (prompt, result, error, context_id) VALUES (?, ?, ?, ?)`
-	result, execErr := s.db.ExecContext(ctx, query, obj.Prompt, obj.Result, errStr, obj.ContextID)
+	query := `INSERT INTO prompts (prompt, result, error, context_id, user_id) VALUES (?, ?, ?, ?, ?)`
+	result, execErr := r.db.ExecContext(ctx, query, obj.Prompt, obj.Result, errStr, obj.ContextID, user.ID)
 	if execErr != nil {
 		return 0, fmt.Errorf("failed to store prompt: %w", execErr)
 	}
@@ -92,13 +167,21 @@ func (s *DBSqlite) StorePrompt(ctx context.Context, obj PromptCreate) (int, erro
 	return int(id), nil
 }
 
-func (s *DBSqlite) ListPrompts(ctx context.Context) ([]Prompt, error) {
+func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User) ([]Prompt, error) {
 	prompts := []Prompt{}
 
-	rows, err := s.db.QueryContext(ctx, "SELECT p.id, p.prompt, p.result, p.error, c.id, c.name, c.context FROM prompts p join contexts c on p.context_id = c.id")
+	rows, err := r.db.QueryContext(ctx, `
+	SELECT
+	p.id, p.prompt, p.result, p.error, c.id, c.name, c.context
+	FROM prompts p
+	JOIN contexts c ON p.context_id = c.id
+	WHERE p.user_id = ?
+	`, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("when listing prompts")
 	}
+
+	defer rows.Close()
 
 	for rows.Next() {
 		p := Prompt{}
@@ -115,7 +198,7 @@ func (s *DBSqlite) ListPrompts(ctx context.Context) ([]Prompt, error) {
 	return prompts, nil
 }
 
-func (s *DBSqlite) UpdateProjectsCache(ctx context.Context, projects []ProjektoveProject) error {
+func (r *RepositorySqlite) UpdateProjectsCache(ctx context.Context, user User, projects []ProjektoveProject) error {
 	data, err := json.Marshal(projects)
 	if err != nil {
 		return fmt.Errorf("failed to marshal projects cache: %w", err)
@@ -123,9 +206,7 @@ func (s *DBSqlite) UpdateProjectsCache(ctx context.Context, projects []Projektov
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	query := "INSERT INTO projects (projects, fetched_at) VALUES (?, ?)"
-
-	_, execErr := s.db.ExecContext(ctx, query, string(data), now)
+	_, execErr := r.db.ExecContext(ctx, "INSERT INTO projects (user_id, projects, fetched_at) VALUES (?, ?, ?)", user.ID, string(data), now)
 	if execErr != nil {
 		return fmt.Errorf("failed to update projects cache: %w", execErr)
 	}
@@ -133,14 +214,10 @@ func (s *DBSqlite) UpdateProjectsCache(ctx context.Context, projects []Projektov
 	return nil
 }
 
-var ErrNoProjectsFound = errors.New("no projects found")
-
-func (s *DBSqlite) ListProjects(ctx context.Context) (ProjectsCacheEntry, error) {
-	query := `SELECT projects, fetched_at FROM projects ORDER BY id desc LIMIT 1`
-
+func (r *RepositorySqlite) ListProjects(ctx context.Context, user User) (ProjectsCacheEntry, error) {
 	var rawProjects string
 	var fetchedAt time.Time
-	err := s.db.QueryRowContext(ctx, query).Scan(&rawProjects, &fetchedAt)
+	err := r.db.QueryRowContext(ctx, "SELECT projects, fetched_at FROM projects WHERE user_id = ? ORDER BY id desc LIMIT 1", user.ID).Scan(&rawProjects, &fetchedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return ProjectsCacheEntry{}, ErrNoProjectsFound
@@ -156,13 +233,14 @@ func (s *DBSqlite) ListProjects(ctx context.Context) (ProjectsCacheEntry, error)
 	return entry, nil
 }
 
-func (s *DBSqlite) ListContexts(ctx context.Context) ([]LLMContext, error) {
+func (r *RepositorySqlite) ListContexts(ctx context.Context, user User) ([]LLMContext, error) {
 	contexts := []LLMContext{}
 
-	rows, err := s.db.QueryContext(ctx, "SELECT id, name, context FROM contexts")
+	rows, err := r.db.QueryContext(ctx, "SELECT id, name, context FROM contexts WHERE user_id = ?")
 	if err != nil {
 		return nil, fmt.Errorf("when listing contexts")
 	}
+	defer rows.Close()
 
 	for rows.Next() {
 		c := LLMContext{}
@@ -179,8 +257,8 @@ func (s *DBSqlite) ListContexts(ctx context.Context) ([]LLMContext, error) {
 	return contexts, nil
 }
 
-func (s *DBSqlite) StoreContext(ctx context.Context, c LLMContextCreate) (int, error) {
-	result, execErr := s.db.ExecContext(ctx, "INSERT INTO contexts (context, name) VALUES (?, ?)", c.Context, c.Name)
+func (r *RepositorySqlite) StoreContext(ctx context.Context, user User, c LLMContextCreate) (int, error) {
+	result, execErr := r.db.ExecContext(ctx, "INSERT INTO contexts (context, name, user_id) VALUES (?, ?, ?)", c.Context, c.Name, user.ID)
 	if execErr != nil {
 		return 0, fmt.Errorf("failed to insert context: %w", execErr)
 	}
@@ -193,18 +271,57 @@ func (s *DBSqlite) StoreContext(ctx context.Context, c LLMContextCreate) (int, e
 	return int(id), nil
 }
 
-func (s *DBSqlite) GetContext(ctx context.Context, id int) (LLMContext, error) {
+func (r *RepositorySqlite) GetContext(ctx context.Context, user User, id int) (LLMContext, error) {
 	c := LLMContext{}
-	if err := s.db.QueryRowContext(ctx, "SELECT id, name, context from contexts WHERE id = ?", id).Scan(&c.ID, &c.Name, &c.Context); err != nil {
+	if err := r.db.QueryRowContext(ctx, "SELECT id, name, context from contexts WHERE id = ? AND user_id = ?", id, user.ID).Scan(&c.ID, &c.Name, &c.Context); err != nil {
 		return LLMContext{}, fmt.Errorf("when fetching context: %w", err)
 	}
 
 	return c, nil
 }
 
-func (s *DBSqlite) StoreIssue(ctx context.Context, issue IssueCreate) (int, error) {
-	query := `INSERT INTO issues (prompt_id, subject, description, project_id, start_date, due_date, author_id, assigned_to_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	result, execErr := s.db.ExecContext(ctx, query, issue.PromptID, issue.Subject, issue.Description, issue.ProjectID, issue.StartDate, issue.DueDate, issue.AuthorID, issue.AssignedToID, IssueStatusCreated)
+func (r *RepositorySqlite) GetUser(ctx context.Context, email string) (User, error) {
+	u := User{Email: email, LLMModels: make([]LLMModel, 0)}
+	if err := r.db.QueryRowContext(ctx, "SELECT id, projektove_token, is_admin FROM users WHERE email = ?", email).Scan(&u.ID, &u.ProjektoveToken, &u.IsAdmin); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return User{}, ErrUserNotFound
+		}
+		return User{}, fmt.Errorf("when fetching user: %w", err)
+	}
+
+	rows, err := r.db.QueryContext(ctx, "SELECT provider, model, token FROM providers WHERE user_id = ?", u.ID)
+
+	if err != nil {
+		return User{}, fmt.Errorf("when fetching providers: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		m := LLMModel{}
+		if err := rows.Scan(&m.Provider, &m.Model, &m.Token); err != nil {
+			return User{}, fmt.Errorf("when scanning results: %w", err)
+		}
+
+		u.LLMModels = append(u.LLMModels, m)
+	}
+
+	if err := rows.Err(); err != nil {
+		return User{}, fmt.Errorf("when iterating over results: %w", err)
+	}
+
+	return u, nil
+}
+
+func (r *RepositorySqlite) StoreUser(ctx context.Context, obj UserCreate) (int, error) {
+	return 0, fmt.Errorf("not implemented")
+}
+func (r *RepositorySqlite) UpdateUser(ctx context.Context, u User, obj UserUpdate) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (r *RepositorySqlite) StoreIssue(ctx context.Context, user User, issue IssueCreate) (int, error) {
+	query := `INSERT INTO issues (parent, parent_id, user_id, subject, description, project_id, start_date, due_date, assigned_to_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	result, execErr := r.db.ExecContext(ctx, query, issue.Parent, issue.ParentID, user.ID, issue.Subject, issue.Description, issue.ProjectID, issue.StartDate, issue.DueDate, issue.AssignedToID, IssueStatusCreated)
 	if execErr != nil {
 		return 0, fmt.Errorf("failed to store issue: %w", execErr)
 	}
@@ -217,9 +334,9 @@ func (s *DBSqlite) StoreIssue(ctx context.Context, issue IssueCreate) (int, erro
 	return int(id), nil
 }
 
-func (s *DBSqlite) UpdateIssue(ctx context.Context, id int, obj IssueUpdate) error {
-	query := `UPDATE issues SET status = ?, subject = ?, description = ?, project_id = ?, start_date = ?, due_date = ?, author_id = ?, assigned_to_id = ?, projektove_id = ? WHERE id = ?`
-	result, execErr := s.db.ExecContext(ctx, query, obj.Status, obj.Subject, obj.Description, obj.ProjectID, obj.StartDate, obj.DueDate, obj.AuthorID, obj.AssignedToID, obj.ProjektoveID, id)
+func (r *RepositorySqlite) UpdateIssue(ctx context.Context, user User, id int, obj IssueUpdate) error {
+	query := `UPDATE issues SET status = ?, subject = ?, description = ?, project_id = ?, start_date = ?, due_date = ?, assigned_to_id = ?, projektove_id = ? WHERE id = ? AND user_id = ?`
+	result, execErr := r.db.ExecContext(ctx, query, obj.Status, obj.Subject, obj.Description, obj.ProjectID, obj.StartDate, obj.DueDate, obj.AssignedToID, obj.ProjektoveID, id, user.ID)
 	if execErr != nil {
 		return fmt.Errorf("failed to update issue: %w", execErr)
 	}
@@ -236,17 +353,17 @@ func (s *DBSqlite) UpdateIssue(ctx context.Context, id int, obj IssueUpdate) err
 	return nil
 }
 
-func (s *DBSqlite) ListIssues(ctx context.Context, promptID int) ([]Issue, error) {
+func (r *RepositorySqlite) ListIssues(ctx context.Context, user User, promptID int) ([]Issue, error) {
 	issues := []Issue{}
 
-	rows, err := s.db.QueryContext(ctx, "SELECT id, prompt_id, subject, description, project_id, start_date, due_date, author_id, assigned_to_id FROM issues WHERE prompt_id = ?", promptID)
+	rows, err := r.db.QueryContext(ctx, "SELECT id, parent, parent_id, subject, description, project_id, start_date, due_date, assigned_to_id, projektove_id FROM issues WHERE prompt_id = ? AND user_id = ?", promptID, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("when listing issues: %w", err)
 	}
 
 	for rows.Next() {
 		i := Issue{}
-		if err := rows.Scan(&i.ID, &i.PromptID, &i.Subject, &i.Description, &i.ProjectID, &i.StartDate, &i.DueDate, &i.AuthorID, &i.AssignedToID); err != nil {
+		if err := rows.Scan(&i.ID, &i.Parent, &i.ParentID, &i.Subject, &i.Description, &i.ProjectID, &i.StartDate, &i.DueDate, &i.AssignedToID, &i.ProjektoveID); err != nil {
 			return nil, fmt.Errorf("when scanning results: %w", err)
 		}
 		issues = append(issues, i)
