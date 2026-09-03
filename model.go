@@ -84,3 +84,17 @@ type User struct {
 	ProjektoveToken string
 	LLMModels       []LLMModel
 }
+
+type Issue struct {
+	ID           int
+	Parent       IssueParent
+	ParentID     int
+	Subject      string
+	Description  string
+	ProjectID    int
+	StartDate    time.Time
+	DueDate      time.Time
+	AssignedToID int
+	ProjektoveID *int
+	Status       IssueStatus
+}

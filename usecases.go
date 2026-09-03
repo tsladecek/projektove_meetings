@@ -3,19 +3,20 @@ package projektovemeeting
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 )
 
 type Controller struct {
-	TxProvider TxProvider
+	TxProvider *TxProvider
 	Repository Repository
 	Projektove Projektove
 	LLM        LLM
 }
 
-func (c Controller) Infer(ctx context.Context, user User, contextID int, meeting string, users []ProjektoveUser) ([]ProjektoveIssueCreate, error) {
-	projects, err := c.Projektove.GetProjects(ctx)
+func (c Controller) Infer(ctx context.Context, user User, contextID int, meeting string, users []ProjektoveUser) ([]Issue, error) {
+	projects, err := c.Projektove.GetProjects(ctx, user)
 	if err != nil {
 		return nil, fmt.Errorf("when listing projects: %w", err)
 	}
@@ -85,24 +86,47 @@ func (c Controller) Infer(ctx context.Context, user User, contextID int, meeting
 	%s
 	`, usersMarshalled, projectsMarshalled, generalContext, meeting)
 
-	var response string
+	issues := []Issue{}
 
-	// todo: not in defer
-	// defer func() {
-	// 	_, _ = c.Repository.StorePrompt(ctx, PromptCreate{Prompt: prompt, Result: response, Error: err, ContextID: contextID})
-	// }()
+	err = c.TxProvider.Transact(func(repo Repository) error {
+		slog.Debug("Inferring...")
+		inference, err := c.LLM.Infer(ctx, prompt)
+		if err != nil {
+			resultErr := err
+			_, err := c.Repository.StorePrompt(ctx, user, PromptCreate{Prompt: prompt, Result: inference, Error: err, ContextID: contextID})
+			if err != nil {
+				resultErr = errors.Join(err, fmt.Errorf("when storing prompt: %w", err))
+			}
+			return fmt.Errorf("when prompting the llm: %w", resultErr)
+		}
 
-	slog.Debug("Inferring...")
-	response, err = c.LLM.Infer(ctx, prompt)
+		slog.Debug("Inference done")
+
+		promptID, err := c.Repository.StorePrompt(ctx, user, PromptCreate{Prompt: prompt, Result: inference, Error: nil, ContextID: contextID})
+		if err != nil {
+			slog.Error("Error occured while storing prompt", "err", err.Error())
+		}
+
+		objs := []IssueCreate{}
+		if err := json.Unmarshal([]byte(inference), &objs); err != nil {
+			return fmt.Errorf("when unmarshalling response: %w", err)
+		}
+
+		for _, iss := range objs {
+			iss.Parent = IssueParentPrompt
+			iss.ParentID = promptID
+			id, err := repo.StoreIssue(ctx, user, iss)
+			if err != nil {
+				return fmt.Errorf("when storing issue: %w", err)
+			}
+
+			issues = append(issues, iss.ToDomain(id))
+		}
+		return nil
+	})
+
 	if err != nil {
-		return nil, fmt.Errorf("when prompting the llm: %w", err)
-	}
-
-	slog.Debug("Inference done")
-
-	issues := []ProjektoveIssueCreate{}
-	if err := json.Unmarshal([]byte(response), &issues); err != nil {
-		return nil, fmt.Errorf("when unmarshalling response: %w", err)
+		return nil, fmt.Errorf("when running inference and storing results: %w", err)
 	}
 
 	return issues, nil

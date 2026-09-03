@@ -15,7 +15,6 @@ import (
 type ProjektoveAPI struct {
 	client  *Client
 	baseURL *url.URL
-	token   string
 	db      Repository
 }
 
@@ -23,7 +22,7 @@ type projektoveCreateBody struct {
 	Issue ProjektoveIssueCreate `json:"issue"`
 }
 
-func NewProjektoveAPI(baseURL, token string, client *Client, db Repository) (Projektove, error) {
+func NewProjektoveAPI(baseURL string, client *Client, db Repository) (Projektove, error) {
 	burl, err := url.Parse(baseURL)
 	if err != nil {
 		return ProjektoveAPI{}, fmt.Errorf("when parsing projektove url %q: %w", baseURL, err)
@@ -34,7 +33,6 @@ func NewProjektoveAPI(baseURL, token string, client *Client, db Repository) (Pro
 	}
 	return ProjektoveAPI{
 		baseURL: burl,
-		token:   token,
 		client:  client,
 		db:      db,
 	}, nil
@@ -44,7 +42,7 @@ type ResponseCreateIssue struct {
 	Issue ProjektoveIssue `json:"issue"`
 }
 
-func (p ProjektoveAPI) CreateIssue(ctx context.Context, obj ProjektoveIssueCreate) (ProjektoveIssue, error) {
+func (p ProjektoveAPI) CreateIssue(ctx context.Context, user User, obj ProjektoveIssueCreate) (ProjektoveIssue, error) {
 	u := p.baseURL.JoinPath("issues.json").String()
 
 	body := projektoveCreateBody{
@@ -60,7 +58,7 @@ func (p ProjektoveAPI) CreateIssue(ctx context.Context, obj ProjektoveIssueCreat
 		return ProjektoveIssue{}, fmt.Errorf("when creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Authorization", p.token)
+	req.Header.Set("X-API-Authorization", user.ProjektoveToken)
 
 	response := ResponseCreateIssue{}
 
@@ -75,8 +73,8 @@ type ResponseProjects struct {
 	Projects []ProjektoveProject `json:"projects"`
 }
 
-func (p ProjektoveAPI) GetProjects(ctx context.Context) ([]ProjektoveProject, error) {
-	fromCache, err := p.db.ListProjects(ctx)
+func (p ProjektoveAPI) GetProjects(ctx context.Context, user User) ([]ProjektoveProject, error) {
+	fromCache, err := p.db.ListProjects(ctx, user)
 	if err != nil {
 		if !errors.Is(err, ErrNoProjectsFound) {
 			return nil, fmt.Errorf("when loading projects from cache: %w", err)
@@ -94,7 +92,7 @@ func (p ProjektoveAPI) GetProjects(ctx context.Context) ([]ProjektoveProject, er
 		return nil, fmt.Errorf("when creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Authorization", p.token)
+	req.Header.Set("X-API-Authorization", user.ProjektoveToken)
 
 	projects := ResponseProjects{}
 
@@ -105,7 +103,7 @@ func (p ProjektoveAPI) GetProjects(ctx context.Context) ([]ProjektoveProject, er
 	go func() {
 		ctxStore, cancelStore := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancelStore()
-		if err := p.db.UpdateProjectsCache(ctxStore, projects.Projects); err != nil {
+		if err := p.db.UpdateProjectsCache(ctxStore, user, projects.Projects); err != nil {
 			slog.Error("Received error when caching projects", "error", err.Error())
 		}
 	}()

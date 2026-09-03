@@ -6,8 +6,8 @@ import (
 )
 
 type Projektove interface {
-	CreateIssue(ctx context.Context, obj ProjektoveIssueCreate) (ProjektoveIssue, error)
-	GetProjects(ctx context.Context) ([]ProjektoveProject, error)
+	CreateIssue(ctx context.Context, user User, obj ProjektoveIssueCreate) (ProjektoveIssue, error)
+	GetProjects(ctx context.Context, user User) ([]ProjektoveProject, error)
 }
 
 type LLM interface {
@@ -53,14 +53,30 @@ const (
 )
 
 type IssueCreate struct {
-	Parent       IssueParent
-	ParentID     int
-	Subject      string
-	Description  string
-	ProjectID    int
-	StartDate    time.Time
-	DueDate      time.Time
-	AssignedToID int
+	Parent       IssueParent `json:"parent"`
+	ParentID     int         `json:"parent_id"`
+	Subject      string      `json:"subject"`
+	Description  string      `json:"description"`
+	ProjectID    int         `json:"project_id"`
+	StartDate    time.Time   `json:"start_date"`
+	DueDate      time.Time   `json:"due_date"`
+	AssignedToID int         `json:"assigned_to_id"`
+}
+
+func (i IssueCreate) ToDomain(id int) Issue {
+	return Issue{
+		ID:           id,
+		Parent:       i.Parent,
+		ParentID:     i.ParentID,
+		Subject:      i.Subject,
+		Description:  i.Description,
+		ProjectID:    i.ProjectID,
+		StartDate:    i.StartDate,
+		DueDate:      i.DueDate,
+		AssignedToID: i.AssignedToID,
+		Status:       IssueStatusCreated,
+	}
+
 }
 
 type IssueUpdate struct {
@@ -72,20 +88,6 @@ type IssueUpdate struct {
 	AssignedToID int
 	Status       IssueStatus
 	ProjektoveID *int
-}
-
-type Issue struct {
-	ID           int
-	Parent       IssueParent
-	ParentID     int
-	Subject      string
-	Description  string
-	ProjectID    int
-	StartDate    time.Time
-	DueDate      time.Time
-	AssignedToID int
-	ProjektoveID *int
-	Status       IssueStatus
 }
 
 type UserCreate struct {
@@ -120,7 +122,7 @@ type Repository interface {
 
 	StoreIssue(ctx context.Context, user User, issue IssueCreate) (int, error)
 	UpdateIssue(ctx context.Context, user User, id int, obj IssueUpdate) error
-	ListIssues(ctx context.Context, user User, promptID int) ([]Issue, error)
+	ListIssues(ctx context.Context, user User, parent IssueParent, parentID int) ([]Issue, error)
 
 	GetUser(ctx context.Context, email string) (User, error)
 	StoreUser(ctx context.Context, obj UserCreate) (int, error)

@@ -45,7 +45,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("when constructing data repository adapter: %w", err)
 	}
-	_ = txp
 
 	userCreate := projektovemeeting.UserCreate{Email: "user@user.com", ProjektoveToken: config.Projektove.Token, Models: []projektovemeeting.LLMModel{{Provider: projektovemeeting.LLMProvider(config.LLM.Provider), Model: config.LLM.Model, Token: config.LLM.Token}}}
 	repo.GetUser(context.Background(), "")
@@ -67,7 +66,7 @@ func run() error {
 		}
 	}
 
-	projektove, err := projektovemeeting.NewProjektoveAPI(config.Projektove.URL, config.Projektove.Token, client, repo)
+	projektove, err := projektovemeeting.NewProjektoveAPI(config.Projektove.URL, client, repo)
 	if err != nil {
 		return fmt.Errorf("when constructing projektove adapter: %w", err)
 	}
@@ -75,7 +74,7 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, LLM: llm}
+	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, LLM: llm, TxProvider: txp}
 
 	if _, err := repo.StoreContext(ctx, user, projektovemeeting.LLMContextCreate{Name: "c1", Context: config.LLM.Context}); err != nil {
 		return fmt.Errorf("when creating context: %w", err)

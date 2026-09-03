@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -58,70 +59,68 @@ func (txp TxProvider) Transact(tf func(db Repository) error) error {
 
 const migration = `
 CREATE TABLE IF NOT EXISTS users (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	email string NOT NULL,
-	is_admin boolean NOT NULL,
-	projektove_token string NOT NULL
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    is_admin INTEGER NOT NULL CHECK (is_admin IN (0, 1)),
+    projektove_token TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS providers (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	user_id INTEGER NOT NULL,
-	FOREIGN KEY (user_id) REFERENCES users(id),
-	provider string NOT NULL,
-	model string NOT NULL,
-	token string NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS prompts (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	prompt TEXT NOT NULL,
-	result TEXT,
-	error TEXT,
-	context_id INT NOT NULL,
-	user_id INT NOT NULL,
-	FOREIGN KEY (user_id) REFERENCES users(id),
-	FOREIGN KEY (context_id) REFERENCES contexts(id)
-);
-
-CREATE TABLE IF NOT EXISTS projects (
-	id INTEGER PRIMARY KEY,
-	projects TEXT NOT NULL,
-	fetched_at TIMESTAMP NOT NULL,
-	user_id INT NOT NULL,
-	FOREIGN KEY (user_id) REFERENCES users(id)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    token TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS contexts (
-	id INTEGER PRIMARY KEY,
-	name TEXT,
-	context TEXT NOT NULL,
-	user_id INT NOT NULL,
-	FOREIGN KEY (user_id) REFERENCES users(id)
+    id INTEGER PRIMARY KEY,
+    name TEXT,
+    context TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS prompts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt TEXT NOT NULL,
+    result TEXT,
+    error TEXT,
+    context_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (context_id) REFERENCES contexts(id)
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY,
+    projects TEXT NOT NULL,
+    fetched_at TIMESTAMP NOT NULL,
+    user_id INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS issue_batches (
-	id INTEGER PRIMARY KEY,
-	file_content blob
+    id INTEGER PRIMARY KEY,
+    file_content BLOB,
+    user_id INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS issues (
-	id INTEGER PRIMARY KEY,
-	subject TEXT NOT NULL,
-	description TEXT NOT NULL,
-	project_id INT NOT NULL,
-	start_date TIMESTAMP NOT NULL,
-	due_date TIMESTAMP,
-	assigned_to_id INT NOT NULL,
-	status ENUM("created", "submitted", "submit_failed"),
-	projektove_id INT,
-
-	-- weak reference to either prompts or issue_batches
-	parent ENUM("prompt", "batch") NOT NULL,
-	parent_id INTEGER, 
+    id INTEGER PRIMARY KEY,
+    subject TEXT NOT NULL,
+    description TEXT NOT NULL,
+    project_id INTEGER NOT NULL,
+    start_date TIMESTAMP NOT NULL,
+    due_date TIMESTAMP,
+    assigned_to_id INTEGER NOT NULL,
+    status TEXT CHECK (status IN ('created', 'submitted', 'submit_failed')),
+    projektove_id INTEGER,
+    parent TEXT NOT NULL CHECK (parent IN ('prompt', 'batch')),
+    parent_id INTEGER NOT NULL
 );
-
-INSERT INTO users (email, is_admin, projektove_token) (admin, true, "");
 `
 
 // NewRepository connects to (or creates) the SQLite database and executes the migration.
@@ -313,15 +312,76 @@ func (r *RepositorySqlite) GetUser(ctx context.Context, email string) (User, err
 }
 
 func (r *RepositorySqlite) StoreUser(ctx context.Context, obj UserCreate) (int, error) {
-	return 0, fmt.Errorf("not implemented")
+	result, execErr := r.db.ExecContext(ctx, "INSERT INTO users (email, is_admin, projektove_token) VALUES (?, false, ?)", obj.Email, obj.ProjektoveToken)
+	if execErr != nil {
+		return 0, fmt.Errorf("failed to insert user: %w", execErr)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last insert id: %w", err)
+	}
+
+	if len(obj.Models) > 0 {
+		var sb strings.Builder
+		sb.WriteString("INSERT INTO providers (user_id, provider, model, token) VALUES ")
+		args := make([]any, 0, len(obj.Models)*4)
+		for i, m := range obj.Models {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString("(?, ?, ?, ?)")
+			args = append(args, id, m.Provider, m.Model, m.Token)
+		}
+		if _, err := r.db.ExecContext(ctx, sb.String(), args...); err != nil {
+			return 0, fmt.Errorf("failed to insert providers: %w", err)
+		}
+	}
+
+	return int(id), nil
 }
+
 func (r *RepositorySqlite) UpdateUser(ctx context.Context, u User, obj UserUpdate) error {
-	return fmt.Errorf("not implemented")
+	result, execErr := r.db.ExecContext(ctx, "UPDATE users SET projektove_token = ? WHERE id = ?", obj.ProjektoveToken, u.ID)
+	if execErr != nil {
+		return fmt.Errorf("failed to update user: %w", execErr)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("user with id %d not found", u.ID)
+	}
+
+	if _, err := r.db.ExecContext(ctx, "DELETE FROM providers WHERE user_id = ?", u.ID); err != nil {
+		return fmt.Errorf("failed to delete providers: %w", err)
+	}
+
+	if len(obj.Models) > 0 {
+		var sb strings.Builder
+		sb.WriteString("INSERT INTO providers (user_id, provider, model, token) VALUES ")
+		args := make([]any, 0, len(obj.Models)*4)
+		for i, m := range obj.Models {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString("(?, ?, ?, ?)")
+			args = append(args, u.ID, m.Provider, m.Model, m.Token)
+		}
+		if _, err := r.db.ExecContext(ctx, sb.String(), args...); err != nil {
+			return fmt.Errorf("failed to insert providers: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (r *RepositorySqlite) StoreIssue(ctx context.Context, user User, issue IssueCreate) (int, error) {
-	query := `INSERT INTO issues (parent, parent_id, user_id, subject, description, project_id, start_date, due_date, assigned_to_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	result, execErr := r.db.ExecContext(ctx, query, issue.Parent, issue.ParentID, user.ID, issue.Subject, issue.Description, issue.ProjectID, issue.StartDate, issue.DueDate, issue.AssignedToID, IssueStatusCreated)
+	query := `INSERT INTO issues (parent, parent_id, subject, description, project_id, start_date, due_date, assigned_to_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	result, execErr := r.db.ExecContext(ctx, query, issue.Parent, issue.ParentID, issue.Subject, issue.Description, issue.ProjectID, issue.StartDate, issue.DueDate, issue.AssignedToID, IssueStatusCreated)
 	if execErr != nil {
 		return 0, fmt.Errorf("failed to store issue: %w", execErr)
 	}
@@ -353,10 +413,10 @@ func (r *RepositorySqlite) UpdateIssue(ctx context.Context, user User, id int, o
 	return nil
 }
 
-func (r *RepositorySqlite) ListIssues(ctx context.Context, user User, promptID int) ([]Issue, error) {
+func (r *RepositorySqlite) ListIssues(ctx context.Context, user User, parent IssueParent, parentID int) ([]Issue, error) {
 	issues := []Issue{}
 
-	rows, err := r.db.QueryContext(ctx, "SELECT id, parent, parent_id, subject, description, project_id, start_date, due_date, assigned_to_id, projektove_id FROM issues WHERE prompt_id = ? AND user_id = ?", promptID, user.ID)
+	rows, err := r.db.QueryContext(ctx, "SELECT id, subject, description, project_id, start_date, due_date, assigned_to_id, projektove_id FROM issues WHERE parent = ? AND parent_id = ? AND user_id = ?", parent, parentID, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("when listing issues: %w", err)
 	}
