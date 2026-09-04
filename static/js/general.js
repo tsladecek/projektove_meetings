@@ -31,18 +31,18 @@ function displaySuccess(msg) {
 }
 
 // toasts
-document.addEventListener("htmx:responseError", (e) => {
+document.addEventListener("htmx:response:error", (e) => {
   displayError(e.detail.xhr.responseText.trim());
 });
 
-document.addEventListener("htmx:afterRequest", (e) => {
-  const t = e.detail.xhr.getResponseHeader("X-Toast");
+document.addEventListener("htmx:after:request", (e) => {
+  const t = e.detail.ctx.response.headers.get("x-toast");
   if (t) {
     displaySuccess(t);
   }
 });
 
-document.addEventListener("htmx:afterProcessNode", function (event) {
+document.addEventListener("htmx:after:process:node", function (event) {
   const tooltips = event.target.querySelectorAll(".nodeWithTooltip");
 
   if (

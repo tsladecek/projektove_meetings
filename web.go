@@ -7,6 +7,7 @@ import (
 	"path"
 
 	g "maragu.dev/gomponents"
+	htmx "maragu.dev/gomponents-htmx"
 	co "maragu.dev/gomponents/components"
 	h "maragu.dev/gomponents/html"
 )
@@ -119,7 +120,19 @@ func withSuccessToast(w http.ResponseWriter) {
 
 func (a api) user() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.components.Page(a.components.PageStub("User", "User page not implemented yet.")).Render(w)
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		profile, err := a.controller.GetUserProfile(r.Context(), user)
+		if err != nil {
+			WriteError(w, "failed to load user", http.StatusInternalServerError, err)
+			return
+		}
+
+		a.components.Page(a.components.UserPage(profile)).Render(w)
 	}
 }
 
@@ -146,19 +159,90 @@ func (a api) prompt() http.HandlerFunc {
 
 func (a api) updateUser() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.notImplemented(w, "update user not implemented")
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		v := UserUpdateView{
+			ProjektoveToken: r.Form.Get("projektove_token"),
+			Models:          []LLMModelView{},
+		}
+
+		providers := r.Form["model_provider"]
+		names := r.Form["model_name"]
+		tokens := r.Form["model_token"]
+		for i := range providers {
+			name := ""
+			token := ""
+			if i < len(names) {
+				name = names[i]
+			}
+			if i < len(tokens) {
+				token = tokens[i]
+			}
+			v.Models = append(v.Models, LLMModelView{
+				Provider: LLMProvider(providers[i]),
+				Model:    name,
+				Token:    token,
+			})
+		}
+
+		if err := a.controller.UpdateUser(r.Context(), user, v); err != nil {
+			WriteError(w, "failed to update user", http.StatusInternalServerError, err)
+			return
+		}
+
+		withSuccessToast(w)
 	}
 }
 
 func (a api) addContext() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.notImplemented(w, "add context not implemented")
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		c := LLMContextCreate{Name: r.Form.Get("name"), Context: r.Form.Get("context")}
+		id, err := a.controller.Repository.StoreContext(r.Context(), user, c)
+		if err != nil {
+			WriteError(w, "failed to add context", http.StatusInternalServerError, err)
+			return
+		}
+		_ = id
+
+		cv := ContextView{ID: id, Name: c.Name, Context: c.Context}
+		a.components.ContextRow(cv).Render(w)
 	}
 }
 
 func (a api) addLLMModel() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.notImplemented(w, "add llm model not implemented")
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		m := LLMModelView{
+			Provider: LLMProvider(r.Form.Get("provider")),
+			Model:    r.Form.Get("model"),
+			Token:    r.Form.Get("token"),
+		}
+		withSuccessToast(w)
+		a.components.ModelRow(m).Render(w)
 	}
 }
 
@@ -276,6 +360,122 @@ func (c components) PageStub(title, message string) g.Node {
 	return h.Div(
 		h.H1(h.Class("text-2xl font-bold mb-4"), g.Text(title)),
 		h.P(g.Text(message)),
+	)
+}
+
+func (c components) UserPage(profile UserProfileView) g.Node {
+	modelRows := []g.Node{}
+	for _, m := range profile.Models {
+		modelRows = append(modelRows, c.ModelRow(LLMModelView{Provider: m.Provider, Model: m.Model, Token: m.Token}))
+	}
+
+	return h.Div(
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("User")),
+
+		h.Form(
+			h.ID("user-form"),
+			h.Method("post"),
+			htmx.Put(c.endpoints.updateUser.Path()),
+			htmx.Swap("none"),
+			h.Class("space-y-6"),
+
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove token")),
+				h.Input(
+					h.Type("text"),
+					h.Name("projektove_token"),
+					h.Value(profile.ProjektoveToken),
+					h.Class("w-full px-3 py-2 border rounded"),
+				),
+			),
+
+			h.Div(
+				h.ID("models-list"),
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("LLM models")),
+				g.Group(modelRows),
+			),
+
+			h.Button(
+				h.Type("submit"),
+				h.Class("px-4 py-2 bg-gray-800 text-white rounded"),
+				g.Text("Save"),
+			),
+		),
+
+		h.Form(
+			h.ID("add-model-form"),
+			h.Method("post"),
+			htmx.Post(c.endpoints.addLLMModel.Path()),
+			htmx.Target("#models-list"),
+			htmx.Swap("beforeend"),
+			htmx.On("htmx:after-request", "if(event.detail.successful) (event.target.closest('form') || event.target).reset()"),
+			h.Class("grid grid-cols-[1fr_1fr_1fr_auto] gap-2 mt-4"),
+			h.Select(h.Name("provider"), h.Placeholder("provider"), h.Class("px-2 py-1 border rounded"), h.Required(), h.Option(h.Value("googleai"), g.Text("google"))),
+			h.Input(h.Type("text"), h.Name("model"), h.Placeholder("model"), h.Class("px-2 py-1 border rounded"), h.Required()),
+			h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
+			h.Button(h.Type("submit"), h.Class("px-3 py-1 bg-gray-800 text-white rounded"), g.Text("Add model")),
+		),
+
+		h.Hr(h.Class("my-8")),
+
+		h.Div(
+			h.Class("space-y-2"),
+			h.H2(h.Class("text-xl font-semibold"), g.Text("Contexts")),
+			h.Div(h.ID("contexts-list"), h.Class("space-y-2"), g.Group(c.contextRows(profile.Contexts))),
+			h.Form(
+				h.ID("add-context-form"),
+				h.Method("post"),
+				htmx.Post(c.endpoints.addContext.Path()),
+				htmx.Target("#contexts-list"),
+				htmx.Swap("beforeend"),
+				htmx.On("htmx:after-request", "if(event.detail.successful) this.reset()"),
+				h.Class("space-y-2"),
+				h.Input(h.Type("text"), h.Name("name"), h.Placeholder("name"), h.Class("w-full px-2 py-1 border rounded"), h.Required()),
+				h.Textarea(
+					h.Name("context"),
+					h.Placeholder("context"),
+					h.Rows("5"),
+					h.Class("w-full px-2 py-1 border rounded"),
+					h.Required(),
+				),
+				h.Button(h.Type("submit"), h.Class("px-3 py-1 bg-gray-800 text-white rounded"), g.Text("Add context")),
+			),
+		),
+	)
+}
+
+func (c components) contextRows(contexts []ContextView) []g.Node {
+	rows := []g.Node{}
+	for _, cx := range contexts {
+		rows = append(rows, c.ContextRow(cx))
+	}
+	return rows
+}
+
+func (c components) ContextRow(cx ContextView) g.Node {
+	return h.Div(
+		h.Class("flex justify-between items-center border rounded px-3 py-2"),
+		h.Div(
+			h.Div(h.Class("font-medium"), g.Text(cx.Name)),
+			h.Div(h.Class("text-sm text-gray-500"), g.Text(cx.Context)),
+		),
+	)
+}
+
+func (c components) ModelRow(m LLMModelView) g.Node {
+	return h.Div(
+		h.Class("model-row flex gap-2 items-center border rounded px-3 py-2"),
+		h.Input(h.Type("text"), h.Name("model_provider"), h.Value(string(m.Provider)), h.Class("flex-1 px-2 py-1 border rounded")),
+		h.Input(h.Type("text"), h.Name("model_name"), h.Value(m.Model), h.Class("flex-1 px-2 py-1 border rounded")),
+		h.Input(h.Type("text"), h.Name("model_token"), h.Value(m.Token), h.Class("flex-1 px-2 py-1 border rounded")),
+		h.Button(
+			h.Type("button"),
+			g.Attr("onclick", "this.closest('.model-row').remove()"),
+			h.Class("px-2 py-1 bg-red-700 text-white rounded"),
+			g.Text("Remove"),
+		),
 	)
 }
 

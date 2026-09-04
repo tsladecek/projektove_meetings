@@ -15,8 +15,7 @@ type Controller struct {
 	LLM        LLM
 }
 
-func (c Controller) Infer(ctx context.Context, user User, contextID int, meeting string, users []ProjektoveUser) ([]Issue, error) {
-	projects, err := c.Projektove.GetProjects(ctx, user)
+func (c Controller) Infer(ctx context.Context, user User, contextID int, meeting string, users []ProjektoveUser) ([]Issue, error) {	projects, err := c.Projektove.GetProjects(ctx, user)
 	if err != nil {
 		return nil, fmt.Errorf("when listing projects: %w", err)
 	}
@@ -130,4 +129,42 @@ func (c Controller) Infer(ctx context.Context, user User, contextID int, meeting
 	}
 
 	return issues, nil
+}
+
+func (c Controller) GetUserProfile(ctx context.Context, user User) (UserProfileView, error) {
+	profile := UserProfileView{
+		Email:           user.Email,
+		ProjektoveToken: user.ProjektoveToken,
+	}
+
+	for _, m := range user.LLMModels {
+		profile.Models = append(profile.Models, LLMModelView{Provider: m.Provider, Model: m.Model, Token: m.Token})
+	}
+
+	contexts, err := c.Repository.ListContexts(ctx, user)
+	if err != nil {
+		return UserProfileView{}, fmt.Errorf("when listing contexts: %w", err)
+	}
+	for _, c := range contexts {
+		profile.Contexts = append(profile.Contexts, ContextView{ID: c.ID, Name: c.Name, Context: c.Context})
+	}
+
+	return profile, nil
+}
+
+func (c Controller) UpdateUser(ctx context.Context, user User, v UserUpdateView) error {
+	obj := UserUpdate{
+		ProjektoveToken: v.ProjektoveToken,
+		UpdateModels:    v.Models != nil,
+		Models:          []LLMModel{},
+	}
+	for _, m := range v.Models {
+		obj.Models = append(obj.Models, LLMModel{Provider: m.Provider, Model: m.Model, Token: m.Token})
+	}
+
+	if err := c.Repository.UpdateUser(ctx, user, obj); err != nil {
+		return fmt.Errorf("when updating user: %w", err)
+	}
+
+	return nil
 }

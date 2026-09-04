@@ -68,3 +68,27 @@ type PromptCreate struct {
 	Error     error
 	ContextID int
 }
+
+type LLMModelView struct {
+	Provider LLMProvider
+	Model    string
+	Token    string
+}
+
+type ContextView struct {
+	ID      int
+	Name    string
+	Context string
+}
+
+type UserProfileView struct {
+	Email           string
+	ProjektoveToken string
+	Models          []LLMModelView
+	Contexts        []ContextView
+}
+
+type UserUpdateView struct {
+	ProjektoveToken string
+	Models          []LLMModelView
+}
