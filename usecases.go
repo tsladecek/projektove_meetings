@@ -13,36 +13,37 @@ type Controller struct {
 	Repository     Repository
 	Projektove     Projektove
 	NewLLMProvider func(provider LLMProvider, model string, token string) (LLM, error)
+	Users          ProjektoveUsers
 }
 
-func (c Controller) Infer(ctx context.Context, user User, modelProvider string, modelName string, contextID int, meeting string, users []ProjektoveUser) ([]Issue, error) {
+func (c Controller) Infer(ctx context.Context, user User, modelProvider string, modelName string, contextID int, meeting string, users []ProjektoveUser) ([]Issue, int, error) {
 	projects, err := c.Projektove.GetProjects(ctx, user)
 	if err != nil {
-		return nil, fmt.Errorf("when listing projects: %w", err)
+		return nil, 0, fmt.Errorf("when listing projects: %w", err)
 	}
 
 	model, found := user.GetModel(LLMProvider(modelProvider), modelName)
 	if !found {
-		return nil, ErrModelNotFound
+		return nil, 0, ErrModelNotFound
 	}
 
 	llm, err := c.NewLLMProvider(model.Provider, model.Model, model.Token)
 	if err != nil {
-		return nil, fmt.Errorf("when setting up llm: %w", err)
+		return nil, 0, fmt.Errorf("when setting up llm: %w", err)
 	}
 
 	projectsMarshalled, err := json.Marshal(projects)
 	if err != nil {
-		return nil, fmt.Errorf("when encoding projects")
+		return nil, 0, fmt.Errorf("when encoding projects")
 	}
 	usersMarshalled, err := json.Marshal(users)
 	if err != nil {
-		return nil, fmt.Errorf("when encoding users")
+		return nil, 0, fmt.Errorf("when encoding users")
 	}
 
 	generalContext, err := c.Repository.GetContext(ctx, user, contextID)
 	if err != nil {
-		return nil, fmt.Errorf("when fetching context %d", contextID)
+		return nil, 0, fmt.Errorf("when fetching context %d", contextID)
 	}
 
 	prompt := fmt.Sprintf(`Given these meeting notes please create in structured
@@ -97,6 +98,7 @@ func (c Controller) Infer(ctx context.Context, user User, modelProvider string, 
 	`, usersMarshalled, projectsMarshalled, generalContext.Context, meeting)
 
 	issues := []Issue{}
+	promptID := 0
 
 	err = c.TxProvider.Transact(func(repo Repository) error {
 		slog.Debug("Inferring...")
@@ -112,7 +114,7 @@ func (c Controller) Infer(ctx context.Context, user User, modelProvider string, 
 
 		slog.Debug("Inference done")
 
-		promptID, err := c.Repository.StorePrompt(ctx, user, PromptCreate{Prompt: prompt, Result: inference, Error: nil, ContextID: contextID})
+		promptID, err = c.Repository.StorePrompt(ctx, user, PromptCreate{Prompt: prompt, Result: inference, Error: nil, ContextID: contextID})
 		if err != nil {
 			slog.Error("Error occured while storing prompt", "err", err.Error())
 		}
@@ -136,10 +138,10 @@ func (c Controller) Infer(ctx context.Context, user User, modelProvider string, 
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("when running inference and storing results: %w", err)
+		return nil, 0, fmt.Errorf("when running inference and storing results: %w", err)
 	}
 
-	return issues, nil
+	return issues, promptID, nil
 }
 
 func (c Controller) GetUserProfile(ctx context.Context, user User) (UserProfileView, error) {
@@ -195,4 +197,27 @@ func (c Controller) DeleteContext(ctx context.Context, user User, id int) error 
 	}
 
 	return nil
+}
+
+func (c Controller) CreatePrompt(ctx context.Context, user User, modelProvider, modelName string, contextID int, meeting string) (int, error) {
+	_, promptID, err := c.Infer(ctx, user, modelProvider, modelName, contextID, meeting, c.Users)
+	if err != nil {
+		return 0, err
+	}
+
+	return promptID, nil
+}
+
+func (c Controller) ListContexts(ctx context.Context, user User) ([]ContextView, error) {
+	contexts, err := c.Repository.ListContexts(ctx, user)
+	if err != nil {
+		return nil, fmt.Errorf("when listing contexts: %w", err)
+	}
+
+	views := make([]ContextView, 0, len(contexts))
+	for _, c := range contexts {
+		views = append(views, ContextView{ID: c.ID, Name: c.Name, Context: c.Context})
+	}
+
+	return views, nil
 }

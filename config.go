@@ -15,7 +15,6 @@ type Config struct {
 	Port       int              `toml:"port" env:"PORT" env-default:"8000"`
 	Projektove ConfigProjektove `toml:"projektove" env-prefix:"PROJEKTOVE_" env-required:"true"`
 	OIDC       ConfigOIDC       `toml:"oidc" env-prefix:"OIDC_"`
-	LLM        ConfigLLM        `toml:"llm" env-prefix:"LLM_" env-required:"true"`
 	Logging    ConfigLogging    `toml:"logging" env-prefix:"LOGGING_"`
 }
 
@@ -36,15 +35,7 @@ type ConfigOIDC struct {
 
 type ConfigProjektove struct {
 	URL   string          `toml:"url" env:"URL" env-required:"true"`
-	Token string          `toml:"token" env:"TOKEN" env-required:"true"`
 	Users ProjektoveUsers `toml:"users" env:"USERS" env-required:"true"`
-}
-
-type ConfigLLM struct {
-	Provider string `toml:"provider" env:"PROVIDER" env-required:"true"`
-	Model    string `toml:"model" env:"MODEL"`
-	Token    string `toml:"token" env:"TOKEN"`
-	Context  string `toml:"context" env:"CONTEXT" env-required:"true"`
 }
 
 func NewConfig(configPath string) (Config, error) {

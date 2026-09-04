@@ -3,6 +3,7 @@ package projektovemeeting
 import (
 	"embed"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -152,7 +153,19 @@ func (a api) prompts() http.HandlerFunc {
 
 func (a api) newPrompt() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.components.Page(a.components.PageStub("New prompt", "New prompt page not implemented yet.")).Render(w)
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		contexts, err := a.controller.ListContexts(r.Context(), user)
+		if err != nil {
+			WriteError(w, "failed to load contexts", http.StatusInternalServerError, err)
+			return
+		}
+
+		a.components.Page(a.components.NewPromptPage(contexts, user.LLMModels)).Render(w)
 	}
 }
 
@@ -289,7 +302,56 @@ func (a api) listContexts() http.HandlerFunc {
 
 func (a api) createPrompt() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.notImplemented(w, "create prompt not implemented")
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			WriteError(w, "invalid request", http.StatusBadRequest, err)
+			return
+		}
+
+		contextID, err := strconv.Atoi(r.Form.Get("context_id"))
+		if err != nil {
+			WriteError(w, "invalid context", http.StatusBadRequest, err)
+			return
+		}
+
+		model := r.Form.Get("model")
+		parts := strings.SplitN(model, "|", 2)
+		if len(parts) != 2 {
+			WriteError(w, "invalid model", http.StatusBadRequest, nil)
+			return
+		}
+		provider, name := parts[0], parts[1]
+
+		file, _, err := r.FormFile("meeting")
+		if err != nil {
+			WriteError(w, "invalid meeting file", http.StatusBadRequest, err)
+			return
+		}
+		defer file.Close()
+
+		meeting, err := io.ReadAll(file)
+		if err != nil {
+			WriteError(w, "failed to read meeting file", http.StatusBadRequest, err)
+			return
+		}
+
+		promptID, err := a.controller.CreatePrompt(r.Context(), user, provider, name, contextID, string(meeting))
+		if err != nil {
+			if errors.Is(err, ErrModelNotFound) {
+				WriteError(w, "llm model not found", http.StatusNotFound, err)
+				return
+			}
+			WriteError(w, "failed to create prompt", http.StatusInternalServerError, err)
+			return
+		}
+
+		redirectPath := strings.Replace(a.components.endpoints.prompt.Path(), "{id}", strconv.Itoa(promptID), 1)
+		http.Redirect(w, r, redirectPath, http.StatusSeeOther)
 	}
 }
 
@@ -486,6 +548,69 @@ func (c components) contextRows(contexts []ContextView) []g.Node {
 	return rows
 }
 
+func (c components) NewPromptPage(contexts []ContextView, models []LLMModel) g.Node {
+	modelOpts := []g.Node{}
+	for _, m := range models {
+		value := string(m.Provider) + "|" + m.Model
+		label := string(m.Provider) + " / " + m.Model
+		modelOpts = append(modelOpts, h.Option(h.Value(value), g.Text(label)))
+	}
+
+	contextOpts := []g.Node{}
+	for _, cx := range contexts {
+		contextOpts = append(contextOpts, h.Option(h.Value(strconv.Itoa(cx.ID)), g.Text(cx.Name)))
+	}
+
+	return h.Div(
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("New prompt")),
+
+		h.Form(
+			h.Method("post"),
+			h.Action(c.endpoints.createPrompt.Path()),
+			h.EncType("multipart/form-data"),
+			h.Class("space-y-6 max-w-2xl"),
+
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("LLM model")),
+				h.Select(
+					h.Name("model"),
+					h.Required(),
+					h.Class("w-full px-3 py-2 border rounded"),
+					h.Option(h.Value(""), g.Text("Select a model")),
+					g.Group(modelOpts),
+				),
+			),
+
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Context")),
+				h.Select(
+					h.Name("context_id"),
+					h.Required(),
+					h.Class("w-full px-3 py-2 border rounded"),
+					h.Option(h.Value(""), g.Text("Select a context")),
+					g.Group(contextOpts),
+				),
+			),
+
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Meeting notes")),
+				h.Input(
+					h.Type("file"),
+					h.Name("meeting"),
+					h.Accept(".txt,.md"),
+					h.Required(),
+					h.Class("w-full px-3 py-2 border rounded"),
+				),
+			),
+
+			c.CreateButton(h.Type("submit")),
+		),
+	)
+}
+
 func (c components) ContextRow(cx ContextView) g.Node {
 	return h.Div(
 		h.Class("context-row flex justify-between items-center border rounded px-3 py-2"),
@@ -539,6 +664,13 @@ func (c components) DeleteButton(opts ...g.Node) g.Node {
 	return c.button(
 		baseButtonClass+"bg-red-700 hover:bg-red-800 text-white px-2 py-1 disabled:bg-red-300 disabled:hover:bg-red-300",
 		append(opts, solid.Trash(h.Class("h-4 w-4")), g.Text("Remove"))...,
+	)
+}
+
+func (c components) CreateButton(opts ...g.Node) g.Node {
+	return c.button(
+		baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 disabled:bg-gray-400 disabled:hover:bg-gray-400",
+		append(opts, solid.Sparkles(h.Class("h-4 w-4")), g.Text("Create issues"))...,
 	)
 }
 

@@ -70,7 +70,17 @@ func TestGetUser_WithProviders(t *testing.T) {
 	assert.Equal(t, id, user.ID)
 	assert.Equal(t, obj.ProjektoveToken, user.ProjektoveToken)
 	require.Len(t, user.LLMModels, 2)
-	assert.ElementsMatch(t, obj.Models, user.LLMModels)
+	assert.ElementsMatch(t, stripModelIDs(obj.Models), stripModelIDs(user.LLMModels))
+}
+
+// stripModelIDs returns a projection of the models without their DB IDs so
+// comparisons don't depend on the concrete values assigned to provider rows.
+func stripModelIDs(models []LLMModel) []LLMModel {
+	out := make([]LLMModel, 0, len(models))
+	for _, m := range models {
+		out = append(out, LLMModel{Provider: m.Provider, Model: m.Model, Token: m.Token})
+	}
+	return out
 }
 
 func TestUpdateUser_Token(t *testing.T) {
@@ -98,7 +108,7 @@ func TestUpdateUser_Providers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "new-token", updated.ProjektoveToken)
 	require.Len(t, updated.LLMModels, 1)
-	assert.Equal(t, replacement, updated.LLMModels)
+	assert.Equal(t, stripModelIDs(replacement), stripModelIDs(updated.LLMModels))
 }
 
 func TestUpdateUser_NotFound(t *testing.T) {
