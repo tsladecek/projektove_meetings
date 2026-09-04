@@ -1,6 +1,7 @@
 package projektovemeeting
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -8,7 +9,13 @@ import (
 
 func WriteError(w http.ResponseWriter, message string, status int, err error) {
 	if err != nil {
-		slog.Error(err.Error())
+		for {
+			slog.Error(err.Error())
+			err := errors.Unwrap(err)
+			if err == nil {
+				break
+			}
+		}
 	}
 	http.Error(w, message, status)
 }
