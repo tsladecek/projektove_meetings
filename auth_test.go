@@ -180,7 +180,7 @@ func TestMiddlewareAuth_ValidCookie(t *testing.T) {
 	repo := newRepository(t)
 	createUser(t, repo, testEmail)
 	verifier, issuer := authVerifier(t, testClientID)
-	auth := AuthOIDC{repo: repo, verifier: verifier}
+	auth := AuthOIDC{repo: repo, verifier: verifier, idTokenCookieName: "token"}
 
 	token := signToken(t, issuer, testClientID, testEmail, testKid)
 
@@ -195,7 +195,7 @@ func TestMiddlewareAuth_ValidCookie(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "token", Value: token})
 	rec := httptest.NewRecorder()
 
-	MiddlewareAuth(next, auth, "token").ServeHTTP(rec, req)
+	auth.Middleware(next).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.True(t, gotOK)
@@ -203,7 +203,7 @@ func TestMiddlewareAuth_ValidCookie(t *testing.T) {
 }
 
 func TestMiddlewareAuth_MissingCookie(t *testing.T) {
-	auth := AuthOIDC{}
+	auth := AuthOIDC{loginURL: "/login"}
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -211,7 +211,7 @@ func TestMiddlewareAuth_MissingCookie(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
 	rec := httptest.NewRecorder()
 
-	MiddlewareAuth(next, auth, "token").ServeHTTP(rec, req)
+	auth.Middleware(next).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusFound, rec.Code)
 	assert.Equal(t, "/login", rec.Header().Get("Location"))
@@ -220,7 +220,7 @@ func TestMiddlewareAuth_MissingCookie(t *testing.T) {
 func TestMiddlewareAuth_InvalidToken(t *testing.T) {
 	repo := newRepository(t)
 	verifier, _ := authVerifier(t, testClientID)
-	auth := AuthOIDC{repo: repo, verifier: verifier}
+	auth := AuthOIDC{repo: repo, verifier: verifier, idTokenCookieName: "token", loginURL: "/login"}
 
 	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
 	req.AddCookie(&http.Cookie{Name: "token", Value: "garbage"})
@@ -229,7 +229,7 @@ func TestMiddlewareAuth_InvalidToken(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	MiddlewareAuth(next, auth, "token").ServeHTTP(rec, req)
+	auth.Middleware(next).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusFound, rec.Code)
 	assert.Equal(t, "/login", rec.Header().Get("Location"))

@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-migrate/migrate/v4"
+	sqliteMigrate "github.com/golang-migrate/migrate/v4/database/sqlite"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "modernc.org/sqlite"
 )
 
@@ -58,77 +61,21 @@ func (txp TxProvider) Transact(tf func(db Repository) error) error {
 }
 
 func RunMigrations(db *sql.DB) error {
-	if _, err := db.Exec(migration); err != nil {
-		return err
+	driver, err := sqliteMigrate.WithInstance(db, &sqliteMigrate.Config{})
+	if err != nil {
+		return fmt.Errorf("when constructing sqlite instance: %w", err)
 	}
+	m, err := migrate.NewWithDatabaseInstance("file://migrations/sqlite", "sqlite", driver)
+	if err != nil {
+		return fmt.Errorf("when constructing migration: %w", err)
+	}
+
+	if err := m.Up(); err != nil {
+		return fmt.Errorf("when running migration: %w", err)
+	}
+
 	return nil
 }
-
-const migration = `
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL,
-    is_admin INTEGER NOT NULL CHECK (is_admin IN (0, 1)),
-    projektove_token TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS providers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    provider TEXT NOT NULL,
-    model TEXT NOT NULL,
-    token TEXT NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS contexts (
-    id INTEGER PRIMARY KEY,
-    name TEXT,
-    context TEXT NOT NULL,
-    user_id INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS prompts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    prompt TEXT NOT NULL,
-    result TEXT,
-    error TEXT,
-    context_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (context_id) REFERENCES contexts(id)
-);
-
-CREATE TABLE IF NOT EXISTS projects (
-    id INTEGER PRIMARY KEY,
-    projects TEXT NOT NULL,
-    fetched_at TIMESTAMP NOT NULL,
-    user_id INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS issue_batches (
-    id INTEGER PRIMARY KEY,
-    file_content BLOB,
-    user_id INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS issues (
-    id INTEGER PRIMARY KEY,
-    subject TEXT NOT NULL,
-    description TEXT NOT NULL,
-    project_id INTEGER NOT NULL,
-    start_date TIMESTAMP NOT NULL,
-    due_date TIMESTAMP,
-    assigned_to_id INTEGER NOT NULL,
-    status TEXT CHECK (status IN ('created', 'submitted', 'submit_failed')),
-    projektove_id INTEGER,
-    parent TEXT NOT NULL CHECK (parent IN ('prompt', 'batch')),
-    parent_id INTEGER NOT NULL
-);
-`
 
 // NewRepository connects to (or creates) the SQLite database and executes the migration.
 func NewRepository(path string) (*TxProvider, Repository, error) {
