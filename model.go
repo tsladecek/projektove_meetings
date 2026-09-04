@@ -87,6 +87,7 @@ type ProjektoveIssueCreate struct {
 }
 
 type LLMModel struct {
+	ID       int
 	Provider LLMProvider
 	Model    string
 	Token    string
@@ -98,6 +99,16 @@ type User struct {
 	Email           string
 	ProjektoveToken string
 	LLMModels       []LLMModel
+}
+
+func (u User) GetModel(provider LLMProvider, model string) (LLMModel, bool) {
+	for _, m := range u.LLMModels {
+		if m.Provider == provider && m.Model == model {
+			return m, true
+		}
+	}
+
+	return LLMModel{}, false
 }
 
 type Issue struct {

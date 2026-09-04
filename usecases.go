@@ -9,15 +9,26 @@ import (
 )
 
 type Controller struct {
-	TxProvider *TxProvider
-	Repository Repository
-	Projektove Projektove
-	LLM        LLM
+	TxProvider     *TxProvider
+	Repository     Repository
+	Projektove     Projektove
+	NewLLMProvider func(provider LLMProvider, model string, token string) (LLM, error)
 }
 
-func (c Controller) Infer(ctx context.Context, user User, contextID int, meeting string, users []ProjektoveUser) ([]Issue, error) {	projects, err := c.Projektove.GetProjects(ctx, user)
+func (c Controller) Infer(ctx context.Context, user User, modelProvider string, modelName string, contextID int, meeting string, users []ProjektoveUser) ([]Issue, error) {
+	projects, err := c.Projektove.GetProjects(ctx, user)
 	if err != nil {
 		return nil, fmt.Errorf("when listing projects: %w", err)
+	}
+
+	model, found := user.GetModel(LLMProvider(modelProvider), modelName)
+	if !found {
+		return nil, ErrModelNotFound
+	}
+
+	llm, err := c.NewLLMProvider(model.Provider, model.Model, model.Token)
+	if err != nil {
+		return nil, fmt.Errorf("when setting up llm: %w", err)
 	}
 
 	projectsMarshalled, err := json.Marshal(projects)
@@ -89,7 +100,7 @@ func (c Controller) Infer(ctx context.Context, user User, contextID int, meeting
 
 	err = c.TxProvider.Transact(func(repo Repository) error {
 		slog.Debug("Inferring...")
-		inference, err := c.LLM.Infer(ctx, prompt)
+		inference, err := llm.Infer(ctx, prompt)
 		if err != nil {
 			resultErr := err
 			_, err := c.Repository.StorePrompt(ctx, user, PromptCreate{Prompt: prompt, Result: inference, Error: err, ContextID: contextID})

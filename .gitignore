@@ -2,3 +2,4 @@
 *.txt
 *.sqlite
 examples
+tmp

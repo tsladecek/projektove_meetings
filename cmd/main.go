@@ -29,11 +29,6 @@ func run() error {
 		return fmt.Errorf("when constructing config: %w", err)
 	}
 
-	llm, err := projektovemeeting.NewLLM(projektovemeeting.LLMProvider(config.LLM.Provider), config.LLM.Model, config.LLM.Token)
-	if err != nil {
-		return fmt.Errorf("when constructing llm adapter: %w", err)
-	}
-
 	client := projektovemeeting.NewClient()
 
 	txp, repo, err := projektovemeeting.NewRepository(config.DB)
@@ -46,7 +41,7 @@ func run() error {
 		return fmt.Errorf("when constructing projektove adapter: %w", err)
 	}
 
-	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, LLM: llm, TxProvider: txp}
+	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, NewLLMProvider: projektovemeeting.NewLLM, TxProvider: txp}
 
 	auth, err := projektovemeeting.NewAuth(repo, config.OIDC, config.BaseURL)
 	if err != nil {

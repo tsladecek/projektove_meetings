@@ -269,7 +269,7 @@ func (r *RepositorySqlite) GetUser(ctx context.Context, email string) (User, err
 		return User{}, fmt.Errorf("when fetching user: %w", err)
 	}
 
-	rows, err := r.DB.QueryContext(ctx, "SELECT provider, model, token FROM providers WHERE user_id = ?", u.ID)
+	rows, err := r.DB.QueryContext(ctx, "SELECT id, provider, model, token FROM providers WHERE user_id = ?", u.ID)
 
 	if err != nil {
 		return User{}, fmt.Errorf("when fetching providers: %w", err)
@@ -278,7 +278,7 @@ func (r *RepositorySqlite) GetUser(ctx context.Context, email string) (User, err
 
 	for rows.Next() {
 		m := LLMModel{}
-		if err := rows.Scan(&m.Provider, &m.Model, &m.Token); err != nil {
+		if err := rows.Scan(&m.ID, &m.Provider, &m.Model, &m.Token); err != nil {
 			return User{}, fmt.Errorf("when scanning results: %w", err)
 		}
 
