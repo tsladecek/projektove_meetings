@@ -6,24 +6,67 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
 )
 
 type AuthOIDC struct {
-	repo     Repository
-	verifier *oidc.IDTokenVerifier
+	repo              Repository
+	verifier          *oidc.IDTokenVerifier
+	provider          *oidc.Provider
+	idTokenCookieName string
+	baseURL           string
+	issuer            string
+
+	// inferred
+	callbackEndpoint string
+	logoutEndoint    string
+	oauth2Config     oauth2.Config
+	loginURL         string
 }
 
-func NewAuth(repo Repository, issuer string, clientID string) (Auth, error) {
-	provider, err := oidc.NewProvider(context.Background(), issuer)
+func NewAuth(repo Repository, config ConfigOIDC, baseURLRaw string) (Auth, error) {
+	provider, err := oidc.NewProvider(context.Background(), config.Issuer)
 	if err != nil {
-		return AuthOIDC{}, fmt.Errorf("when discovering oidc provider %q: %w", issuer, err)
+		return AuthOIDC{}, fmt.Errorf("when discovering oidc provider %q: %w", config.Issuer, err)
+	}
+
+	baseURL, err := url.Parse(baseURLRaw)
+	if err != nil {
+		return nil, fmt.Errorf("when parsing base url %q: %w", baseURLRaw, err)
+	}
+
+	callbackURL, err := url.JoinPath(baseURL.String(), config.CallbackEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("when parsing callback url %q: %w", config.CallbackEndpoint, err)
+	}
+
+	// Configure an OpenID Connect aware OAuth2 client.
+	oauth2Config := oauth2.Config{
+		ClientID:     config.ClientID,
+		ClientSecret: config.ClientSecret,
+		RedirectURL:  callbackURL,
+
+		// Discovery returns the OAuth2 endpoints.
+		Endpoint: provider.Endpoint(),
+
+		// "openid" is a required scope for OpenID Connect flows.
+		Scopes: []string{oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail},
 	}
 
 	return AuthOIDC{
-		repo:     repo,
-		verifier: provider.Verifier(&oidc.Config{ClientID: clientID}),
+		repo:              repo,
+		verifier:          provider.Verifier(&oidc.Config{ClientID: config.ClientID}),
+		provider:          provider,
+		idTokenCookieName: config.IDTokenCookieName,
+		callbackEndpoint:  config.CallbackEndpoint,
+		oauth2Config:      oauth2Config,
+		loginURL:          oauth2Config.AuthCodeURL(""),
+		baseURL:           baseURL.String(),
+		logoutEndoint:     config.LogoutEndpoint,
+		issuer:            config.Issuer,
 	}, nil
 }
 
@@ -80,20 +123,83 @@ func UserFromContext(ctx context.Context) (User, bool) {
 	return u, ok
 }
 
-func MiddlewareAuth(next http.Handler, auth Auth, cookieName string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(cookieName)
+func (a AuthOIDC) RegisterRoutes(m *http.ServeMux) {
+	m.HandleFunc(http.MethodGet+" "+a.callbackEndpoint, func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		oauth2Token, err := a.oauth2Config.Exchange(ctx, r.URL.Query().Get("code"))
 		if err != nil {
-			http.Redirect(w, r, "/login", http.StatusFound)
+			WriteError(w, "Failed to exchange tokens", http.StatusUnauthorized, err)
 			return
 		}
 
-		user, err := auth.Authenticate(r.Context(), cookie.Value)
-		if err != nil {
-			slog.Debug("Authentication failed", "error", err.Error())
-			http.Redirect(w, r, "/login", http.StatusFound)
+		// Extract the ID Token from OAuth2 token.
+		rawIDToken, ok := oauth2Token.Extra("id_token").(string)
+		if !ok {
+			WriteError(w, "Missing ID Token", http.StatusUnauthorized, nil)
 			return
 		}
+
+		// Parse and verify ID Token payload.
+		idToken, err := a.verifier.Verify(ctx, rawIDToken)
+		if err != nil {
+			WriteError(w, "Token verification failed", http.StatusUnauthorized, err)
+			return
+		}
+
+		// Extract custom claims
+		var claims struct {
+			Email string `json:"email"`
+		}
+		if err := idToken.Claims(&claims); err != nil {
+			WriteError(w, "Failed to extract tokens", http.StatusUnauthorized, err)
+			return
+		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     a.idTokenCookieName,
+			Value:    url.QueryEscape(rawIDToken),
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   true,
+		})
+		slog.Debug("Authentication Successful")
+		http.Redirect(w, r, a.baseURL, http.StatusFound)
+	})
+
+	m.HandleFunc(http.MethodGet+" "+a.logoutEndoint, func(w http.ResponseWriter, r *http.Request) {
+		idTokenHint := ""
+		idTokenCookie, err := r.Cookie(a.idTokenCookieName)
+		if err != nil {
+			slog.Error("No ID Token Found during logout")
+			http.Redirect(w, r, a.baseURL, http.StatusFound)
+			return
+		}
+
+		idTokenHint = idTokenCookie.Value
+		http.SetCookie(w, &http.Cookie{Name: a.idTokenCookieName, MaxAge: -1})
+		http.Redirect(w, r, fmt.Sprintf("%s/protocol/openid-connect/logout?id_token_hint=%s&post_logout_redirect_uri=%s", a.issuer, idTokenHint, a.baseURL), http.StatusFound)
+	})
+}
+
+func (a AuthOIDC) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie(a.idTokenCookieName)
+		if err != nil {
+			slog.Debug("ID token cookie not found")
+			http.Redirect(w, r, a.loginURL, http.StatusFound)
+			return
+		}
+
+		slog.Debug("Cookie found. Authenticating")
+		user, err := a.Authenticate(r.Context(), cookie.Value)
+		if err != nil {
+			slog.Debug("Authentication failed", "error", err.Error())
+			http.SetCookie(w, &http.Cookie{Name: a.idTokenCookieName, MaxAge: -1})
+			http.Redirect(w, r, a.loginURL, http.StatusFound)
+			return
+		}
+		slog.Debug("Authentication successful")
 
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
 	})

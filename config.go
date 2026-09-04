@@ -11,6 +11,8 @@ import (
 
 type Config struct {
 	DB         string           `toml:"db" env:"DB" description:"name of the sqlite database for storing cache and prompt history" env-default:"db.sqlite"`
+	BaseURL    string           `toml:"base_url" env:"BASEURL" env-required:"true"`
+	Port       int              `toml:"port" env:"PORT" env-default:"8000"`
 	Projektove ConfigProjektove `toml:"projektove" env-prefix:"PROJEKTOVE_" env-required:"true"`
 	OIDC       ConfigOIDC       `toml:"oidc" env-prefix:"OIDC_"`
 	LLM        ConfigLLM        `toml:"llm" env-prefix:"LLM_" env-required:"true"`
@@ -24,8 +26,12 @@ type ConfigLogging struct {
 }
 
 type ConfigOIDC struct {
-	Issuer   string `toml:"issuer" env:"ISSUER"`
-	ClientID string `toml:"client_id" env:"CLIENT_ID"`
+	Issuer            string `toml:"issuer" env:"ISSUER" env-required:"true"`
+	ClientID          string `toml:"client_id" env:"CLIENTID" env-required:"true"`
+	ClientSecret      string `toml:"client_secret" env:"CLIENTSECRET" env-required:"true"`
+	IDTokenCookieName string `toml:"id_token_cookie_name" env:"IDTOKENCOOKIENAME" env-required:"true"`
+	CallbackEndpoint  string `toml:"callback_endpoint" env:"CALLBACKENDPOINT" env-default:"/oauth2/callback"`
+	LogoutEndpoint    string `toml:"logout_endpoint" env:"LOGOUTENDPOINT" env-default:"/oauth2/logout"`
 }
 
 type ConfigProjektove struct {

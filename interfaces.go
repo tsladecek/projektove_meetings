@@ -2,6 +2,7 @@ package projektovemeeting
 
 import (
 	"context"
+	"net/http"
 )
 
 type Projektove interface {
@@ -35,4 +36,6 @@ type Repository interface {
 
 type Auth interface {
 	Authenticate(ctx context.Context, token string) (User, error)
+	RegisterRoutes(m *http.ServeMux)
+	Middleware(next http.Handler) http.Handler
 }
