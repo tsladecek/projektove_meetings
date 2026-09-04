@@ -71,6 +71,9 @@ func RunMigrations(db *sql.DB) error {
 	}
 
 	if err := m.Up(); err != nil {
+		if errors.Is(err, migrate.ErrNoChange) {
+			return nil
+		}
 		return fmt.Errorf("when running migration: %w", err)
 	}
 
