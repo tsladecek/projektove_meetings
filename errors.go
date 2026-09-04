@@ -6,6 +6,7 @@ var (
 	ErrNoProjectsFound           error = errors.New("no projects found")
 	ErrUserNotFound                    = errors.New("user not found")
 	ErrContextNotFound                 = errors.New("context not found")
+	ErrContextInUse                    = errors.New("context is in use")
 	ErrIssueNotFound                   = errors.New("issue not found")
 	ErrParentDoesNotBelongToUser       = errors.New("parent does not belong to user")
 )

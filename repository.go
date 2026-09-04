@@ -239,6 +239,27 @@ func (r *RepositorySqlite) GetContext(ctx context.Context, user User, id int) (L
 	return c, nil
 }
 
+func (r *RepositorySqlite) DeleteContext(ctx context.Context, user User, id int) error {
+	if _, err := r.GetContext(ctx, user, id); err != nil {
+		return err
+	}
+
+	var count int
+	if err := r.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM prompts WHERE context_id = ? AND user_id = ?", id, user.ID).Scan(&count); err != nil {
+		return fmt.Errorf("when checking prompt usage of context: %w", err)
+	}
+
+	if count > 0 {
+		return ErrContextInUse
+	}
+
+	if _, err := r.DB.ExecContext(ctx, "DELETE FROM contexts WHERE id = ? AND user_id = ?", id, user.ID); err != nil {
+		return fmt.Errorf("when deleting context: %w", err)
+	}
+
+	return nil
+}
+
 func (r *RepositorySqlite) GetUser(ctx context.Context, email string) (User, error) {
 	u := User{Email: email, LLMModels: make([]LLMModel, 0)}
 	if err := r.DB.QueryRowContext(ctx, "SELECT id, projektove_token, is_admin FROM users WHERE email = ?", email).Scan(&u.ID, &u.ProjektoveToken, &u.IsAdmin); err != nil {

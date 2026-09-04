@@ -2,9 +2,12 @@ package projektovemeeting
 
 import (
 	"embed"
+	"errors"
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
+	"strings"
 
 	g "maragu.dev/gomponents"
 	"maragu.dev/gomponents-heroicons/v3/solid"
@@ -52,9 +55,10 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller) ht
 
 		// api
 
-		updateUser:  endAPI(http.MethodPut, "/user"),
-		addContext:  endAPI(http.MethodPost, "/contexts"),
-		addLLMModel: endAPI(http.MethodPost, "/models"),
+		updateUser:    endAPI(http.MethodPut, "/user"),
+		addContext:    endAPI(http.MethodPost, "/contexts"),
+		addLLMModel:   endAPI(http.MethodPost, "/models"),
+		deleteContext: endAPI(http.MethodDelete, "/contexts/{id}"),
 
 		listContexts: endAPI(http.MethodGet, "/contexts"),
 		createPrompt: endAPI(http.MethodPost, "/prompts"),
@@ -84,6 +88,7 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller) ht
 		// api
 		{endpoint: e.updateUser, handler: a.updateUser()},
 		{endpoint: e.addContext, handler: a.addContext()},
+		{endpoint: e.deleteContext, handler: a.deleteContext()},
 		{endpoint: e.addLLMModel, handler: a.addLLMModel()},
 		{endpoint: e.listContexts, handler: a.listContexts()},
 		{endpoint: e.createPrompt, handler: a.createPrompt()},
@@ -220,15 +225,43 @@ func (a api) addContext() http.HandlerFunc {
 		}
 
 		c := LLMContextCreate{Name: r.Form.Get("name"), Context: r.Form.Get("context")}
-		id, err := a.controller.Repository.StoreContext(r.Context(), user, c)
+		cv, err := a.controller.StoreContext(r.Context(), user, c)
 		if err != nil {
 			WriteError(w, "failed to add context", http.StatusInternalServerError, err)
 			return
 		}
-		_ = id
 
-		cv := ContextView{ID: id, Name: c.Name, Context: c.Context}
 		a.components.ContextRow(cv).Render(w)
+	}
+}
+
+func (a api) deleteContext() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil {
+			WriteError(w, "invalid context id", http.StatusBadRequest, err)
+			return
+		}
+
+		if err := a.controller.DeleteContext(r.Context(), user, id); err != nil {
+			switch {
+			case errors.Is(err, ErrContextInUse):
+				WriteError(w, "context is in use by a prompt", http.StatusConflict, nil)
+			case errors.Is(err, ErrContextNotFound):
+				WriteError(w, "context not found", http.StatusNotFound, nil)
+			default:
+				WriteError(w, "failed to delete context", http.StatusInternalServerError, err)
+			}
+			return
+		}
+
+		withSuccessToast(w)
 	}
 }
 
@@ -283,9 +316,10 @@ type endpoints struct {
 	prompt    Endpoint
 
 	// api - should have /api prefix
-	updateUser  Endpoint
-	addContext  Endpoint
-	addLLMModel Endpoint
+	updateUser    Endpoint
+	addContext    Endpoint
+	deleteContext Endpoint
+	addLLMModel   Endpoint
 
 	listContexts Endpoint
 	createPrompt Endpoint
@@ -454,10 +488,17 @@ func (c components) contextRows(contexts []ContextView) []g.Node {
 
 func (c components) ContextRow(cx ContextView) g.Node {
 	return h.Div(
-		h.Class("flex justify-between items-center border rounded px-3 py-2"),
+		h.Class("context-row flex justify-between items-center border rounded px-3 py-2"),
 		h.Div(
 			h.Div(h.Class("font-medium"), g.Text(cx.Name)),
 			h.Div(h.Class("text-sm text-gray-500"), g.Text(cx.Context)),
+		),
+		c.DeleteButton(
+			h.Type("button"),
+			htmx.Delete(strings.Replace(c.endpoints.deleteContext.Path(), "{id}", strconv.Itoa(cx.ID), 1)),
+			htmx.Target("closest .context-row"),
+			htmx.Swap("outerHTML swap:0.2s"),
+			htmx.Confirm("Delete this context?"),
 		),
 	)
 }

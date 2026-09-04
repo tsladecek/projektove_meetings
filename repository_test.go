@@ -167,6 +167,49 @@ func TestListContexts_IsolatedByUser(t *testing.T) {
 	assert.Empty(t, contexts)
 }
 
+func TestDeleteContext(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	id := storeContext(t, repo, user, "c1")
+
+	err := repo.DeleteContext(t.Context(), user, id)
+	require.NoError(t, err)
+
+	_, err = repo.GetContext(t.Context(), user, id)
+	assert.True(t, errors.Is(err, ErrContextNotFound))
+}
+
+func TestDeleteContext_NotFound(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	err := repo.DeleteContext(t.Context(), user, 999)
+	assert.True(t, errors.Is(err, ErrContextNotFound))
+}
+
+func TestDeleteContext_NotOwned(t *testing.T) {
+	repo := newRepository(t)
+	owner := storeUser(t, repo, "owner@email.com")
+	other := storeUser(t, repo, "other@email.com")
+	id := storeContext(t, repo, owner, "c1")
+
+	err := repo.DeleteContext(t.Context(), other, id)
+	assert.True(t, errors.Is(err, ErrContextNotFound))
+}
+
+func TestDeleteContext_InUse(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	id := storeContext(t, repo, user, "c1")
+	storePrompt(t, repo, user, id)
+
+	err := repo.DeleteContext(t.Context(), user, id)
+	assert.True(t, errors.Is(err, ErrContextInUse))
+
+	_, err = repo.GetContext(t.Context(), user, id)
+	require.NoError(t, err)
+}
+
 func TestListPrompts(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")

@@ -24,6 +24,7 @@ type Repository interface {
 	GetContext(ctx context.Context, user User, id int) (LLMContext, error)
 	ListContexts(ctx context.Context, user User) ([]LLMContext, error)
 	StoreContext(ctx context.Context, user User, c LLMContextCreate) (int, error)
+	DeleteContext(ctx context.Context, user User, id int) error
 
 	StoreIssue(ctx context.Context, user User, issue IssueCreate) (int, error)
 	UpdateIssue(ctx context.Context, user User, parent IssueParent, parentID int, id int, obj IssueUpdate) error

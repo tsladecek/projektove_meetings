@@ -168,3 +168,20 @@ func (c Controller) UpdateUser(ctx context.Context, user User, v UserUpdateView)
 
 	return nil
 }
+
+func (c Controller) StoreContext(ctx context.Context, user User, v LLMContextCreate) (ContextView, error) {
+	id, err := c.Repository.StoreContext(ctx, user, v)
+	if err != nil {
+		return ContextView{}, fmt.Errorf("when storing context: %w", err)
+	}
+
+	return ContextView{ID: id, Name: v.Name, Context: v.Context}, nil
+}
+
+func (c Controller) DeleteContext(ctx context.Context, user User, id int) error {
+	if err := c.Repository.DeleteContext(ctx, user, id); err != nil {
+		return err
+	}
+
+	return nil
+}
