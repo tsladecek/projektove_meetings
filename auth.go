@@ -177,8 +177,8 @@ func (a AuthOIDC) RegisterRoutes(m *http.ServeMux) {
 		}
 
 		idTokenHint = idTokenCookie.Value
-		http.SetCookie(w, &http.Cookie{Name: a.idTokenCookieName, MaxAge: -1})
-		http.Redirect(w, r, fmt.Sprintf("%s/protocol/openid-connect/logout?id_token_hint=%s&post_logout_redirect_uri=%s", a.issuer, idTokenHint, a.baseURL), http.StatusFound)
+		http.SetCookie(w, &http.Cookie{Name: a.idTokenCookieName, Path: "/", Value: "", MaxAge: -1, HttpOnly: true, Secure: true})
+		http.Redirect(w, r, fmt.Sprintf("%s/protocol/openid-connect/logout?id_token_hint=%s&post_logout_redirect_uri=%s", a.issuer, idTokenHint, url.QueryEscape(a.loginURL)), http.StatusFound)
 	})
 }
 
@@ -195,7 +195,7 @@ func (a AuthOIDC) Middleware(next http.Handler) http.Handler {
 		user, err := a.Authenticate(r.Context(), cookie.Value)
 		if err != nil {
 			slog.Debug("Authentication failed", "error", err.Error())
-			http.SetCookie(w, &http.Cookie{Name: a.idTokenCookieName, MaxAge: -1})
+			http.SetCookie(w, &http.Cookie{Name: a.idTokenCookieName, Path: "/", Value: "", MaxAge: -1, HttpOnly: true, Secure: true})
 			http.Redirect(w, r, a.loginURL, http.StatusFound)
 			return
 		}
