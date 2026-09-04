@@ -7,6 +7,7 @@ import (
 	"path"
 
 	g "maragu.dev/gomponents"
+	"maragu.dev/gomponents-heroicons/v3/solid"
 	htmx "maragu.dev/gomponents-htmx"
 	co "maragu.dev/gomponents/components"
 	h "maragu.dev/gomponents/html"
@@ -14,6 +15,8 @@ import (
 
 //go:embed static/*
 var staticFS embed.FS
+
+const baseButtonClass = "inline-flex items-center justify-center gap-1 rounded font-medium cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 "
 
 type api struct {
 	controller Controller
@@ -241,7 +244,6 @@ func (a api) addLLMModel() http.HandlerFunc {
 			Model:    r.Form.Get("model"),
 			Token:    r.Form.Get("token"),
 		}
-		withSuccessToast(w)
 		a.components.ModelRow(m).Render(w)
 	}
 }
@@ -397,11 +399,7 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 				g.Group(modelRows),
 			),
 
-			h.Button(
-				h.Type("submit"),
-				h.Class("px-4 py-2 bg-gray-800 text-white rounded"),
-				g.Text("Save"),
-			),
+			c.SaveButton(h.Type("submit")),
 		),
 
 		h.Form(
@@ -410,12 +408,12 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 			htmx.Post(c.endpoints.addLLMModel.Path()),
 			htmx.Target("#models-list"),
 			htmx.Swap("beforeend"),
-			htmx.On("htmx:after-request", "if(event.detail.successful) (event.target.closest('form') || event.target).reset()"),
+			htmx.On("htmx:after:request", "this.reset()"),
 			h.Class("grid grid-cols-[1fr_1fr_1fr_auto] gap-2 mt-4"),
 			h.Select(h.Name("provider"), h.Placeholder("provider"), h.Class("px-2 py-1 border rounded"), h.Required(), h.Option(h.Value("googleai"), g.Text("google"))),
 			h.Input(h.Type("text"), h.Name("model"), h.Placeholder("model"), h.Class("px-2 py-1 border rounded"), h.Required()),
 			h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
-			h.Button(h.Type("submit"), h.Class("px-3 py-1 bg-gray-800 text-white rounded"), g.Text("Add model")),
+			c.AddButton("Add model", h.Type("submit")),
 		),
 
 		h.Hr(h.Class("my-8")),
@@ -430,7 +428,7 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 				htmx.Post(c.endpoints.addContext.Path()),
 				htmx.Target("#contexts-list"),
 				htmx.Swap("beforeend"),
-				htmx.On("htmx:after-request", "if(event.detail.successful) this.reset()"),
+				htmx.On("htmx:after:request", "this.reset()"),
 				h.Class("space-y-2"),
 				h.Input(h.Type("text"), h.Name("name"), h.Placeholder("name"), h.Class("w-full px-2 py-1 border rounded"), h.Required()),
 				h.Textarea(
@@ -440,7 +438,7 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 					h.Class("w-full px-2 py-1 border rounded"),
 					h.Required(),
 				),
-				h.Button(h.Type("submit"), h.Class("px-3 py-1 bg-gray-800 text-white rounded"), g.Text("Add context")),
+				c.AddButton("Add context", h.Type("submit")),
 			),
 		),
 	)
@@ -470,12 +468,36 @@ func (c components) ModelRow(m LLMModelView) g.Node {
 		h.Input(h.Type("text"), h.Name("model_provider"), h.Value(string(m.Provider)), h.Class("flex-1 px-2 py-1 border rounded")),
 		h.Input(h.Type("text"), h.Name("model_name"), h.Value(m.Model), h.Class("flex-1 px-2 py-1 border rounded")),
 		h.Input(h.Type("text"), h.Name("model_token"), h.Value(m.Token), h.Class("flex-1 px-2 py-1 border rounded")),
-		h.Button(
-			h.Type("button"),
-			g.Attr("onclick", "this.closest('.model-row').remove()"),
-			h.Class("px-2 py-1 bg-red-700 text-white rounded"),
-			g.Text("Remove"),
-		),
+		c.DeleteButton(h.Type("button"), g.Attr("onclick", "this.closest('.model-row').remove()")),
+	)
+}
+
+// button is the base button component. Concrete buttons should use it
+// and supply their own colors, sizes and icons.
+func (c components) button(class string, opts ...g.Node) g.Node {
+	return h.Button(
+		append([]g.Node{h.Class(class)}, opts...)...,
+	)
+}
+
+func (c components) SaveButton(opts ...g.Node) g.Node {
+	return c.button(
+		baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 disabled:bg-gray-400 disabled:hover:bg-gray-400",
+		append(opts, solid.Check(h.Class("h-4 w-4")), g.Text("Save"))...,
+	)
+}
+
+func (c components) AddButton(label string, opts ...g.Node) g.Node {
+	return c.button(
+		baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-3 py-1 disabled:bg-gray-400 disabled:hover:bg-gray-400",
+		append(opts, solid.Plus(h.Class("h-4 w-4")), g.Text(label))...,
+	)
+}
+
+func (c components) DeleteButton(opts ...g.Node) g.Node {
+	return c.button(
+		baseButtonClass+"bg-red-700 hover:bg-red-800 text-white px-2 py-1 disabled:bg-red-300 disabled:hover:bg-red-300",
+		append(opts, solid.Trash(h.Class("h-4 w-4")), g.Text("Remove"))...,
 	)
 }
 
