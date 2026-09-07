@@ -3,7 +3,6 @@ package projektovemeeting
 import (
 	"context"
 	"errors"
-	"strconv"
 	"testing"
 	"time"
 
@@ -43,14 +42,19 @@ func (f *fakeLLM) Infer(ctx context.Context, prompt string) (string, error) {
 func TestControllerGetPrompt(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, promptUUID := storePrompt(t, repo, user, contextID)
 
 	createdID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	created, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, createdID)
 	require.NoError(t, err)
 
 	submitted := newIssueCreate(IssueParentPrompt, promptID)
 	submitted.Subject = "submitted subject"
 	submittedID, err := repo.StoreIssue(t.Context(), user, submitted)
+	require.NoError(t, err)
+	submittedFromDB, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, submittedID)
 	require.NoError(t, err)
 
 	projektoveID := 42
@@ -66,38 +70,41 @@ func TestControllerGetPrompt(t *testing.T) {
 	}))
 
 	c := Controller{Repository: repo}
-	view, err := c.GetPrompt(t.Context(), user, promptID)
+	view, err := c.GetPrompt(t.Context(), user, promptUUID)
 	require.NoError(t, err)
-	assert.Equal(t, strconv.Itoa(promptID), view.ID)
+	assert.Equal(t, promptUUID, view.ID)
 	assert.Equal(t, "c1", view.ContextName)
 	require.Len(t, view.Issues, 2)
 
-	byID := map[int]IssueView{}
+	byID := map[string]IssueView{}
 	for _, iss := range view.Issues {
 		byID[iss.ID] = iss
 	}
 
-	assert.Equal(t, IssueStatusCreated, byID[createdID].Status)
-	assert.True(t, byID[createdID].Editable)
+	assert.Equal(t, IssueStatusCreated, byID[created.UUID].Status)
+	assert.True(t, byID[created.UUID].Editable)
 
-	assert.Equal(t, IssueStatusSubmitted, byID[submittedID].Status)
-	assert.False(t, byID[submittedID].Editable)
-	require.NotNil(t, byID[submittedID].ProjektoveID)
-	assert.Equal(t, projektoveID, *byID[submittedID].ProjektoveID)
+	assert.Equal(t, IssueStatusSubmitted, byID[submittedFromDB.UUID].Status)
+	assert.False(t, byID[submittedFromDB.UUID].Editable)
+	require.NotNil(t, byID[submittedFromDB.UUID].ProjektoveID)
+	assert.Equal(t, projektoveID, *byID[submittedFromDB.UUID].ProjektoveID)
 }
 
 func TestControllerUpdateIssue(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
 	require.NoError(t, err)
 
 	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	due := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 
 	c := Controller{Repository: repo}
-	err = c.UpdateIssue(t.Context(), user, promptID, issueID, IssueUpdateView{
+	err = c.UpdateIssue(t.Context(), user, iss.UUID, IssueUpdateView{
 		Subject:      "new subject",
 		Description:  "new description",
 		ProjectID:    2,
@@ -121,8 +128,11 @@ func TestControllerUpdateIssue(t *testing.T) {
 func TestUpdateIssue_Submitted(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
 	require.NoError(t, err)
 
 	projektoveID := 42
@@ -135,21 +145,24 @@ func TestUpdateIssue_Submitted(t *testing.T) {
 	}))
 
 	c := Controller{Repository: repo}
-	err = c.UpdateIssue(t.Context(), user, promptID, issueID, IssueUpdateView{Subject: "nope"})
+	err = c.UpdateIssue(t.Context(), user, iss.UUID, IssueUpdateView{Subject: "nope"})
 	assert.True(t, errors.Is(err, ErrIssueSubmitted))
 }
 
 func TestSubmitIssue(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
 	require.NoError(t, err)
 
 	p := &fakeProjektove{createResult: ProjektoveIssue{ID: 7}}
 	c := Controller{Repository: repo, Projektove: p}
 
-	err = c.SubmitIssue(t.Context(), user, promptID, issueID)
+	err = c.SubmitIssue(t.Context(), user, iss.UUID)
 	require.NoError(t, err)
 
 	require.Len(t, p.created, 1)
@@ -166,14 +179,17 @@ func TestSubmitIssue(t *testing.T) {
 func TestSubmitIssue_Failure(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
 	require.NoError(t, err)
 
 	p := &fakeProjektove{createErr: errors.New("boom")}
 	c := Controller{Repository: repo, Projektove: p}
 
-	err = c.SubmitIssue(t.Context(), user, promptID, issueID)
+	err = c.SubmitIssue(t.Context(), user, iss.UUID)
 	require.Error(t, err)
 
 	got, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
@@ -185,8 +201,11 @@ func TestSubmitIssue_Failure(t *testing.T) {
 func TestSubmitIssue_Submitted(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
 	require.NoError(t, err)
 
 	projektoveID := 42
@@ -201,7 +220,7 @@ func TestSubmitIssue_Submitted(t *testing.T) {
 	p := &fakeProjektove{}
 	c := Controller{Repository: repo, Projektove: p}
 
-	err = c.SubmitIssue(t.Context(), user, promptID, issueID)
+	err = c.SubmitIssue(t.Context(), user, iss.UUID)
 	assert.True(t, errors.Is(err, ErrIssueSubmitted))
 	assert.Empty(t, p.created)
 }
@@ -209,8 +228,11 @@ func TestSubmitIssue_Submitted(t *testing.T) {
 func TestSubmitIssue_Incomplete(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
 	require.NoError(t, err)
 
 	require.NoError(t, repo.UpdateIssue(t.Context(), user, IssueParentPrompt, promptID, issueID, IssueUpdate{
@@ -226,7 +248,7 @@ func TestSubmitIssue_Incomplete(t *testing.T) {
 	p := &fakeProjektove{}
 	c := Controller{Repository: repo, Projektove: p}
 
-	err = c.SubmitIssue(t.Context(), user, promptID, issueID)
+	err = c.SubmitIssue(t.Context(), user, iss.UUID)
 	assert.True(t, errors.Is(err, ErrIssueIncomplete))
 	assert.Empty(t, p.created)
 
@@ -238,11 +260,11 @@ func TestSubmitIssue_Incomplete(t *testing.T) {
 func TestControllerListPrompts(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	contextID := storeContext(t, repo, user, "c1")
+	contextID, _ := storeContext(t, repo, user, "c1")
 
-	olderID, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "older", Result: "r", ContextID: contextID, Status: PromptStatusError})
+	olderID, olderUUID, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "older", Result: "r", ContextID: contextID, Status: PromptStatusError})
 	require.NoError(t, err)
-	newerID, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "newer", Result: "r", ContextID: contextID, Status: PromptStatusDone})
+	_, newerUUID, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "newer", Result: "r", ContextID: contextID, Status: PromptStatusDone})
 	require.NoError(t, err)
 
 	submitted := newIssueCreate(IssueParentPrompt, olderID)
@@ -271,11 +293,11 @@ func TestControllerListPrompts(t *testing.T) {
 	assert.False(t, view.HasMore)
 
 	// newest first
-	assert.Equal(t, strconv.Itoa(newerID), view.Items[0].ID)
+	assert.Equal(t, newerUUID, view.Items[0].ID)
 	assert.True(t, view.Items[0].CreatedAt.After(view.Items[1].CreatedAt))
 	assert.Equal(t, PromptStatusDone, view.Items[0].Status)
 
-	assert.Equal(t, strconv.Itoa(olderID), view.Items[1].ID)
+	assert.Equal(t, olderUUID, view.Items[1].ID)
 	assert.Equal(t, "c1", view.Items[1].ContextName)
 	assert.Equal(t, PromptStatusError, view.Items[1].Status)
 	assert.Equal(t, 1, view.Items[1].TotalIssues)
@@ -287,13 +309,13 @@ func TestControllerListPrompts(t *testing.T) {
 	require.Len(t, page.Items, 1)
 	assert.True(t, page.HasMore)
 	assert.Equal(t, 1, page.NextOffset)
-	assert.Equal(t, strconv.Itoa(newerID), page.Items[0].ID)
+	assert.Equal(t, newerUUID, page.Items[0].ID)
 
 	rest, err := c.ListPrompts(t.Context(), user, 1, page.NextOffset)
 	require.NoError(t, err)
 	require.Len(t, rest.Items, 1)
 	assert.False(t, rest.HasMore)
-	assert.Equal(t, strconv.Itoa(olderID), rest.Items[0].ID)
+	assert.Equal(t, olderUUID, rest.Items[0].ID)
 }
 
 func TestControllerCreatePrompt_EnqueuesTask(t *testing.T) {
@@ -301,15 +323,15 @@ func TestControllerCreatePrompt_EnqueuesTask(t *testing.T) {
 	storeUser(t, repo, "user@email.com")
 	user, err := repo.GetUser(t.Context(), "user@email.com")
 	require.NoError(t, err)
-	contextID := storeContext(t, repo, user, "c1")
+	contextID, _ := storeContext(t, repo, user, "c1")
 
 	c := Controller{Repository: repo, TxProvider: txp, Users: ProjektoveUsers{{ID: 1, Name: "u1"}}}
 
-	promptID, err := c.CreatePrompt(t.Context(), user, "googleai", "gemini", contextID, "meeting notes")
+	promptUUID, err := c.CreatePrompt(t.Context(), user, "googleai", "gemini", contextID, "meeting notes")
 	require.NoError(t, err)
-	require.NotZero(t, promptID)
+	require.NotEmpty(t, promptUUID)
 
-	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	prompt, err := repo.GetPromptByUUID(t.Context(), user, promptUUID)
 	require.NoError(t, err)
 	assert.Equal(t, PromptStatusCreated, prompt.Status)
 	assert.Equal(t, "googleai", prompt.Provider)
@@ -322,13 +344,13 @@ func TestControllerCreatePrompt_EnqueuesTask(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, TaskTypeInference, task.Type)
-	assert.Equal(t, InferenceJob{UserID: user.ID, PromptID: promptID}, task.Payload)
+	assert.Equal(t, InferenceJob{UserID: user.ID, PromptID: prompt.ID}, task.Payload)
 }
 
 func TestControllerCreatePrompt_ModelNotFound(t *testing.T) {
 	repo, txp := newAppRepos(t)
 	user := storeUser(t, repo, "user@email.com")
-	contextID := storeContext(t, repo, user, "c1")
+	contextID, _ := storeContext(t, repo, user, "c1")
 
 	c := Controller{Repository: repo, TxProvider: txp}
 
@@ -344,8 +366,8 @@ func TestControllerCreatePrompt_ModelNotFound(t *testing.T) {
 func TestRunInference(t *testing.T) {
 	repo, txp := newAppRepos(t)
 	user := storeUser(t, repo, "user@email.com")
-	contextID := storeContext(t, repo, user, "c1")
-	promptID := storePromptAt(t, repo, user, contextID, "googleai", "gemini", PromptStatusCreated)
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePromptAt(t, repo, user, contextID, "googleai", "gemini", PromptStatusCreated)
 
 	projects := []ProjektoveProject{{ID: 1, Name: "p1", Description: "d1"}}
 	p := &fakeProjektove{getProjectsRes: projects}
@@ -383,7 +405,8 @@ func TestRunInference(t *testing.T) {
 func TestRunInference_SkipsNonPending(t *testing.T) {
 	repo, txp := newAppRepos(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 
 	c := Controller{Repository: repo, TxProvider: txp, Projektove: &fakeProjektove{}, NewLLMProvider: func(provider LLMProvider, model string, token string) (LLM, error) {
 		return &fakeLLM{}, nil
@@ -401,7 +424,8 @@ func TestRunInference_SkipsNonPending(t *testing.T) {
 func TestRunInference_LLMError(t *testing.T) {
 	repo, txp := newAppRepos(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePromptAt(t, repo, user, storeContext(t, repo, user, "c1"), "googleai", "gemini", PromptStatusCreated)
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePromptAt(t, repo, user, contextID, "googleai", "gemini", PromptStatusCreated)
 
 	p := &fakeProjektove{getProjectsRes: []ProjektoveProject{{ID: 1, Name: "p1", Description: "d1"}}}
 	c := Controller{
@@ -426,7 +450,8 @@ func TestRunInference_LLMError(t *testing.T) {
 func TestRunInference_UnmarshalError(t *testing.T) {
 	repo, txp := newAppRepos(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePromptAt(t, repo, user, storeContext(t, repo, user, "c1"), "googleai", "gemini", PromptStatusCreated)
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePromptAt(t, repo, user, contextID, "googleai", "gemini", PromptStatusCreated)
 
 	c := Controller{
 		Repository: repo,
@@ -449,7 +474,8 @@ func TestRunInference_UnmarshalError(t *testing.T) {
 func TestRunInference_ProjectsError(t *testing.T) {
 	repo, txp := newAppRepos(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePromptAt(t, repo, user, storeContext(t, repo, user, "c1"), "googleai", "gemini", PromptStatusCreated)
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePromptAt(t, repo, user, contextID, "googleai", "gemini", PromptStatusCreated)
 
 	c := Controller{
 		Repository: repo,

@@ -88,7 +88,7 @@ type LLMModelView struct {
 }
 
 type ContextView struct {
-	ID      int
+	ID      string
 	Name    string
 	Context string
 }
@@ -106,7 +106,7 @@ type UserUpdateView struct {
 }
 
 type IssueView struct {
-	ID           int
+	ID           string
 	Subject      string
 	Description  string
 	ProjectID    int

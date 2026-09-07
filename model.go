@@ -158,6 +158,7 @@ func (u User) GetModel(provider LLMProvider, model string) (LLMModel, bool) {
 
 type Issue struct {
 	ID           int
+	UUID         string
 	Parent       IssueParent
 	ParentID     int
 	Subject      string
@@ -171,7 +172,8 @@ type Issue struct {
 }
 
 type Prompt struct {
-	ID              string
+	ID              int
+	UUID            string
 	Prompt          string
 	Result          string
 	Error           string
@@ -187,6 +189,7 @@ type Prompt struct {
 
 type LLMContext struct {
 	ID      int
+	UUID    string
 	Context string
 	Name    string
 }

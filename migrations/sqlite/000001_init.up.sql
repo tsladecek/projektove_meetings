@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS providers (
 
 CREATE TABLE IF NOT EXISTS contexts (
     id INTEGER PRIMARY KEY,
+    uuid TEXT UNIQUE NOT NULL,
     name TEXT,
     context TEXT NOT NULL,
     user_id INTEGER NOT NULL,
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS contexts (
 
 CREATE TABLE IF NOT EXISTS prompts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
     prompt TEXT NOT NULL,
     result TEXT,
     error TEXT,
@@ -66,6 +68,7 @@ CREATE TABLE IF NOT EXISTS issue_batches (
 
 CREATE TABLE IF NOT EXISTS issues (
     id INTEGER PRIMARY KEY,
+    uuid TEXT UNIQUE NOT NULL,
     subject TEXT NOT NULL,
     description TEXT NOT NULL,
     project_id INTEGER NOT NULL,

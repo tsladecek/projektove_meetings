@@ -182,7 +182,7 @@ func (c Controller) GetUserProfile(ctx context.Context, user User) (UserProfileV
 		return UserProfileView{}, fmt.Errorf("when listing contexts: %w", err)
 	}
 	for _, c := range contexts {
-		profile.Contexts = append(profile.Contexts, ContextView{ID: c.ID, Name: c.Name, Context: c.Context})
+		profile.Contexts = append(profile.Contexts, ContextView{ID: c.UUID, Name: c.Name, Context: c.Context})
 	}
 
 	return profile, nil
@@ -206,30 +206,38 @@ func (c Controller) UpdateUser(ctx context.Context, user User, v UserUpdateView)
 }
 
 func (c Controller) StoreContext(ctx context.Context, user User, v LLMContextCreate) (ContextView, error) {
-	id, err := c.Repository.StoreContext(ctx, user, v)
+	_, uuid, err := c.Repository.StoreContext(ctx, user, v)
 	if err != nil {
 		return ContextView{}, fmt.Errorf("when storing context: %w", err)
 	}
 
-	return ContextView{ID: id, Name: v.Name, Context: v.Context}, nil
+	return ContextView{ID: uuid, Name: v.Name, Context: v.Context}, nil
 }
 
-func (c Controller) DeleteContext(ctx context.Context, user User, id int) error {
-	if err := c.Repository.DeleteContext(ctx, user, id); err != nil {
+func (c Controller) ResolveContext(ctx context.Context, user User, uuid string) (LLMContext, error) {
+	cx, err := c.Repository.GetContextByUUID(ctx, user, uuid)
+	if err != nil {
+		return LLMContext{}, err
+	}
+	return cx, nil
+}
+
+func (c Controller) DeleteContext(ctx context.Context, user User, uuid string) error {
+	if err := c.Repository.DeleteContextByUUID(ctx, user, uuid); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (c Controller) CreatePrompt(ctx context.Context, user User, modelProvider, modelName string, contextID int, meeting string) (int, error) {
+func (c Controller) CreatePrompt(ctx context.Context, user User, modelProvider, modelName string, contextID int, meeting string) (string, error) {
 	if _, found := user.GetModel(LLMProvider(modelProvider), modelName); !found {
-		return 0, ErrModelNotFound
+		return "", ErrModelNotFound
 	}
 
-	promptID := 0
+	promptUUID := ""
 	if err := c.TxProvider.Transact(func(repo Repository) error {
-		id, err := repo.StorePrompt(ctx, user, PromptCreate{
+		id, uuid, err := repo.StorePrompt(ctx, user, PromptCreate{
 			ContextID:   contextID,
 			Status:      PromptStatusCreated,
 			Provider:    modelProvider,
@@ -239,17 +247,17 @@ func (c Controller) CreatePrompt(ctx context.Context, user User, modelProvider, 
 		if err != nil {
 			return fmt.Errorf("when storing prompt: %w", err)
 		}
-		promptID = id
+		promptUUID = uuid
 
 		if _, err := repo.EnqueueTask(ctx, TaskCreate{Type: TaskTypeInference, Payload: InferenceJob{UserID: user.ID, PromptID: id}}); err != nil {
 			return fmt.Errorf("when enqueuing inference task: %w", err)
 		}
 		return nil
 	}); err != nil {
-		return 0, fmt.Errorf("when creating prompt: %w", err)
+		return "", fmt.Errorf("when creating prompt: %w", err)
 	}
 
-	return promptID, nil
+	return promptUUID, nil
 }
 
 func (c Controller) ListContexts(ctx context.Context, user User) ([]ContextView, error) {
@@ -260,7 +268,7 @@ func (c Controller) ListContexts(ctx context.Context, user User) ([]ContextView,
 
 	views := make([]ContextView, 0, len(contexts))
 	for _, c := range contexts {
-		views = append(views, ContextView{ID: c.ID, Name: c.Name, Context: c.Context})
+		views = append(views, ContextView{ID: c.UUID, Name: c.Name, Context: c.Context})
 	}
 
 	return views, nil
@@ -296,7 +304,7 @@ func (c Controller) ListPrompts(ctx context.Context, user User, limit, offset in
 	items := make([]PromptListItem, 0, len(prompts))
 	for _, p := range prompts {
 		items = append(items, PromptListItem{
-			ID:              p.ID,
+			ID:              p.UUID,
 			ContextName:     p.Context.Name,
 			Status:          p.Status,
 			CreatedAt:       p.CreatedAt,
@@ -312,19 +320,37 @@ func (c Controller) ListPrompts(ctx context.Context, user User, limit, offset in
 	}, nil
 }
 
-func (c Controller) GetPrompt(ctx context.Context, user User, id int) (PromptView, error) {
-	prompt, err := c.Repository.GetPrompt(ctx, user, id)
+func (c Controller) GetPrompt(ctx context.Context, user User, uuid string) (PromptView, error) {
+	prompt, err := c.Repository.GetPromptByUUID(ctx, user, uuid)
+	if err != nil {
+		return PromptView{}, err
+	}
+	return c.buildPromptView(ctx, user, prompt)
+}
+
+// GetPromptViewForIssue resolves an issue by its uuid and returns the view of its
+// parent prompt, so the frontend can re-render an issue card in context.
+func (c Controller) GetPromptViewForIssue(ctx context.Context, user User, issueUUID string) (PromptView, error) {
+	iss, err := c.Repository.GetIssueByUUID(ctx, user, issueUUID)
 	if err != nil {
 		return PromptView{}, err
 	}
 
-	issues, err := c.Repository.ListIssues(ctx, user, IssueParentPrompt, id)
+	prompt, err := c.Repository.GetPrompt(ctx, user, iss.ParentID)
+	if err != nil {
+		return PromptView{}, err
+	}
+	return c.buildPromptView(ctx, user, prompt)
+}
+
+func (c Controller) buildPromptView(ctx context.Context, user User, prompt Prompt) (PromptView, error) {
+	issues, err := c.Repository.ListIssues(ctx, user, IssueParentPrompt, prompt.ID)
 	if err != nil {
 		return PromptView{}, fmt.Errorf("when listing issues: %w", err)
 	}
 
 	view := PromptView{
-		ID:          prompt.ID,
+		ID:          prompt.UUID,
 		Prompt:      prompt.Prompt,
 		Result:      prompt.Result,
 		Error:       prompt.Error,
@@ -335,7 +361,7 @@ func (c Controller) GetPrompt(ctx context.Context, user User, id int) (PromptVie
 
 	for _, iss := range issues {
 		view.Issues = append(view.Issues, IssueView{
-			ID:           iss.ID,
+			ID:           iss.UUID,
 			Subject:      iss.Subject,
 			Description:  iss.Description,
 			ProjectID:    iss.ProjectID,
@@ -351,8 +377,8 @@ func (c Controller) GetPrompt(ctx context.Context, user User, id int) (PromptVie
 	return view, nil
 }
 
-func (c Controller) UpdateIssue(ctx context.Context, user User, promptID, issueID int, v IssueUpdateView) error {
-	iss, err := c.Repository.GetIssue(ctx, user, IssueParentPrompt, promptID, issueID)
+func (c Controller) UpdateIssue(ctx context.Context, user User, issueUUID string, v IssueUpdateView) error {
+	iss, err := c.Repository.GetIssueByUUID(ctx, user, issueUUID)
 	if err != nil {
 		return err
 	}
@@ -372,15 +398,15 @@ func (c Controller) UpdateIssue(ctx context.Context, user User, promptID, issueI
 		ProjektoveID: iss.ProjektoveID,
 	}
 
-	if err := c.Repository.UpdateIssue(ctx, user, IssueParentPrompt, promptID, issueID, obj); err != nil {
+	if err := c.Repository.UpdateIssue(ctx, user, iss.Parent, iss.ParentID, iss.ID, obj); err != nil {
 		return fmt.Errorf("when updating issue: %w", err)
 	}
 
 	return nil
 }
 
-func (c Controller) SubmitIssue(ctx context.Context, user User, promptID, issueID int) error {
-	iss, err := c.Repository.GetIssue(ctx, user, IssueParentPrompt, promptID, issueID)
+func (c Controller) SubmitIssue(ctx context.Context, user User, issueUUID string) error {
+	iss, err := c.Repository.GetIssueByUUID(ctx, user, issueUUID)
 	if err != nil {
 		return err
 	}
@@ -421,7 +447,7 @@ func (c Controller) SubmitIssue(ctx context.Context, user User, promptID, issueI
 	created, err := c.Projektove.CreateIssue(ctx, user, obj)
 	if err != nil {
 		failStatus := IssueStatusSubmitFailed
-		if updateErr := c.Repository.UpdateIssue(ctx, user, IssueParentPrompt, promptID, issueID, IssueUpdate{
+		if updateErr := c.Repository.UpdateIssue(ctx, user, iss.Parent, iss.ParentID, iss.ID, IssueUpdate{
 			Subject:      iss.Subject,
 			Description:  iss.Description,
 			ProjectID:    iss.ProjectID,
@@ -436,7 +462,7 @@ func (c Controller) SubmitIssue(ctx context.Context, user User, promptID, issueI
 		return fmt.Errorf("when creating issue: %w", err)
 	}
 
-	if err := c.Repository.UpdateIssue(ctx, user, IssueParentPrompt, promptID, issueID, IssueUpdate{
+	if err := c.Repository.UpdateIssue(ctx, user, iss.Parent, iss.ParentID, iss.ID, IssueUpdate{
 		Subject:      iss.Subject,
 		Description:  iss.Description,
 		ProjectID:    iss.ProjectID,

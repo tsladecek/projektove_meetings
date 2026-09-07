@@ -2,7 +2,6 @@ package projektovemeeting
 
 import (
 	"errors"
-	"strconv"
 	"testing"
 	"time"
 
@@ -18,25 +17,25 @@ func storeUser(t *testing.T, repo Repository, email string) User {
 	return User{ID: id, Email: email}
 }
 
-func storeContext(t *testing.T, repo Repository, user User, name string) int {
+func storeContext(t *testing.T, repo Repository, user User, name string) (int, string) {
 	t.Helper()
-	id, err := repo.StoreContext(t.Context(), user, LLMContextCreate{Name: name, Context: "context"})
+	id, uuid, err := repo.StoreContext(t.Context(), user, LLMContextCreate{Name: name, Context: "context"})
 	require.NoError(t, err)
-	return id
+	return id, uuid
 }
 
-func storePrompt(t *testing.T, repo Repository, user User, contextID int) int {
+func storePrompt(t *testing.T, repo Repository, user User, contextID int) (int, string) {
 	t.Helper()
-	id, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "prompt", Result: "result", ContextID: contextID})
+	id, uuid, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "prompt", Result: "result", ContextID: contextID})
 	require.NoError(t, err)
-	return id
+	return id, uuid
 }
 
-func storePromptAt(t *testing.T, repo Repository, user User, contextID int, provider, model string, status PromptStatus) int {
+func storePromptAt(t *testing.T, repo Repository, user User, contextID int, provider, model string, status PromptStatus) (int, string) {
 	t.Helper()
-	id, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "prompt", Result: "result", ContextID: contextID, Provider: provider, Model: model, Status: status})
+	id, uuid, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "prompt", Result: "result", ContextID: contextID, Provider: provider, Model: model, Status: status})
 	require.NoError(t, err)
-	return id
+	return id, uuid
 }
 
 func TestUser(t *testing.T) {
@@ -130,15 +129,21 @@ func TestStoreContext(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
 
-	id, err := repo.StoreContext(t.Context(), user, LLMContextCreate{Name: "c1", Context: "ctx"})
+	id, uuid, err := repo.StoreContext(t.Context(), user, LLMContextCreate{Name: "c1", Context: "ctx"})
 	require.NoError(t, err)
 	require.NotZero(t, id)
+	require.NotEmpty(t, uuid)
 
 	got, err := repo.GetContext(t.Context(), user, id)
 	require.NoError(t, err)
 	assert.Equal(t, id, got.ID)
+	assert.Equal(t, uuid, got.UUID)
 	assert.Equal(t, "c1", got.Name)
 	assert.Equal(t, "ctx", got.Context)
+
+	byUUID, err := repo.GetContextByUUID(t.Context(), user, uuid)
+	require.NoError(t, err)
+	assert.Equal(t, id, byUUID.ID)
 }
 
 func TestGetContext_NotFound(t *testing.T) {
@@ -154,7 +159,7 @@ func TestGetContext_NotOwned(t *testing.T) {
 	repo := newRepository(t)
 	owner := storeUser(t, repo, "owner@email.com")
 	other := storeUser(t, repo, "other@email.com")
-	id := storeContext(t, repo, owner, "c1")
+	id, _ := storeContext(t, repo, owner, "c1")
 
 	_, err := repo.GetContext(t.Context(), other, id)
 	require.Error(t, err)
@@ -187,9 +192,9 @@ func TestListContexts_IsolatedByUser(t *testing.T) {
 func TestDeleteContext(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	id := storeContext(t, repo, user, "c1")
+	id, uuid := storeContext(t, repo, user, "c1")
 
-	err := repo.DeleteContext(t.Context(), user, id)
+	err := repo.DeleteContextByUUID(t.Context(), user, uuid)
 	require.NoError(t, err)
 
 	_, err = repo.GetContext(t.Context(), user, id)
@@ -200,7 +205,7 @@ func TestDeleteContext_NotFound(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
 
-	err := repo.DeleteContext(t.Context(), user, 999)
+	err := repo.DeleteContextByUUID(t.Context(), user, "missing")
 	assert.True(t, errors.Is(err, ErrContextNotFound))
 }
 
@@ -208,19 +213,22 @@ func TestDeleteContext_NotOwned(t *testing.T) {
 	repo := newRepository(t)
 	owner := storeUser(t, repo, "owner@email.com")
 	other := storeUser(t, repo, "other@email.com")
-	id := storeContext(t, repo, owner, "c1")
+	id, uuid := storeContext(t, repo, owner, "c1")
 
-	err := repo.DeleteContext(t.Context(), other, id)
+	err := repo.DeleteContextByUUID(t.Context(), other, uuid)
 	assert.True(t, errors.Is(err, ErrContextNotFound))
+
+	_, err = repo.GetContext(t.Context(), owner, id)
+	require.NoError(t, err)
 }
 
 func TestDeleteContext_InUse(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	id := storeContext(t, repo, user, "c1")
+	id, uuid := storeContext(t, repo, user, "c1")
 	storePrompt(t, repo, user, id)
 
-	err := repo.DeleteContext(t.Context(), user, id)
+	err := repo.DeleteContextByUUID(t.Context(), user, uuid)
 	assert.True(t, errors.Is(err, ErrContextInUse))
 
 	_, err = repo.GetContext(t.Context(), user, id)
@@ -230,14 +238,16 @@ func TestDeleteContext_InUse(t *testing.T) {
 func TestListPrompts(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	contextID := storeContext(t, repo, user, "c1")
+	contextID, _ := storeContext(t, repo, user, "c1")
 
-	id1, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "p1", Result: "r1", ContextID: contextID})
+	id1, uuid1, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "p1", Result: "r1", ContextID: contextID})
 	require.NoError(t, err)
 	require.NotZero(t, id1)
-	id2, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "p2", Result: "r2", ContextID: contextID})
+	require.NotEmpty(t, uuid1)
+	id2, uuid2, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "p2", Result: "r2", ContextID: contextID})
 	require.NoError(t, err)
 	require.NotZero(t, id2)
+	require.NotEmpty(t, uuid2)
 
 	prompts, hasMore, err := repo.ListPrompts(t.Context(), user, 20, 0)
 	require.NoError(t, err)
@@ -245,8 +255,8 @@ func TestListPrompts(t *testing.T) {
 	assert.False(t, hasMore)
 
 	// newest first
-	assert.Equal(t, strconv.Itoa(id2), prompts[0].ID)
-	assert.Equal(t, strconv.Itoa(id1), prompts[1].ID)
+	assert.Equal(t, uuid2, prompts[0].UUID)
+	assert.Equal(t, uuid1, prompts[1].UUID)
 
 	// created_at is populated on store
 	assert.False(t, prompts[0].CreatedAt.IsZero())
@@ -255,35 +265,37 @@ func TestListPrompts(t *testing.T) {
 func TestListPrompts_Pagination(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	contextID := storeContext(t, repo, user, "c1")
+	contextID, _ := storeContext(t, repo, user, "c1")
 
 	ids := []int{}
+	uuids := []string{}
 	for i := 0; i < 3; i++ {
-		id, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "p", ContextID: contextID})
+		id, uuid, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "p", ContextID: contextID})
 		require.NoError(t, err)
 		ids = append(ids, id)
+		uuids = append(uuids, uuid)
 	}
 
 	page1, hasMore, err := repo.ListPrompts(t.Context(), user, 2, 0)
 	require.NoError(t, err)
 	require.Len(t, page1, 2)
 	assert.True(t, hasMore)
-	assert.Equal(t, strconv.Itoa(ids[2]), page1[0].ID)
-	assert.Equal(t, strconv.Itoa(ids[1]), page1[1].ID)
+	assert.Equal(t, uuids[2], page1[0].UUID)
+	assert.Equal(t, uuids[1], page1[1].UUID)
 
 	page2, hasMore, err := repo.ListPrompts(t.Context(), user, 2, 2)
 	require.NoError(t, err)
 	require.Len(t, page2, 1)
 	assert.False(t, hasMore)
-	assert.Equal(t, strconv.Itoa(ids[0]), page2[0].ID)
+	assert.Equal(t, uuids[0], page2[0].UUID)
 }
 
 func TestListPrompts_IssueCounts(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	contextID := storeContext(t, repo, user, "c1")
+	contextID, _ := storeContext(t, repo, user, "c1")
 
-	promptID, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "p1", ContextID: contextID})
+	promptID, _, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "p1", ContextID: contextID})
 	require.NoError(t, err)
 
 	submitted := newIssueCreate(IssueParentPrompt, promptID)
@@ -366,7 +378,8 @@ func newIssueCreate(parent IssueParent, parentID int) IssueCreate {
 func TestStoreIssue(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 
 	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
 	require.NoError(t, err)
@@ -376,7 +389,8 @@ func TestStoreIssue(t *testing.T) {
 func TestListIssues(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 
 	id1, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
 	require.NoError(t, err)
@@ -406,7 +420,8 @@ func TestListIssues_ParentNotOwned(t *testing.T) {
 	repo := newRepository(t)
 	owner := storeUser(t, repo, "owner@email.com")
 	other := storeUser(t, repo, "other@email.com")
-	promptID := storePrompt(t, repo, owner, storeContext(t, repo, owner, "c1"))
+	contextID, _ := storeContext(t, repo, owner, "c1")
+	promptID, _ := storePrompt(t, repo, owner, contextID)
 
 	_, err := repo.ListIssues(t.Context(), other, IssueParentPrompt, promptID)
 	require.Error(t, err)
@@ -416,7 +431,8 @@ func TestListIssues_ParentNotOwned(t *testing.T) {
 func TestUpdateIssue(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
 	require.NoError(t, err)
 
@@ -445,7 +461,8 @@ func TestUpdateIssue(t *testing.T) {
 func TestUpdateIssue_NotFound(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 
 	err := repo.UpdateIssue(t.Context(), user, IssueParentPrompt, promptID, 999, IssueUpdate{Status: IssueStatusSubmitted})
 	require.Error(t, err)
@@ -456,7 +473,8 @@ func TestUpdateIssue_ParentNotOwned(t *testing.T) {
 	repo := newRepository(t)
 	owner := storeUser(t, repo, "owner@email.com")
 	other := storeUser(t, repo, "other@email.com")
-	promptID := storePrompt(t, repo, owner, storeContext(t, repo, owner, "c1"))
+	contextID, _ := storeContext(t, repo, owner, "c1")
+	promptID, _ := storePrompt(t, repo, owner, contextID)
 
 	err := repo.UpdateIssue(t.Context(), other, IssueParentPrompt, promptID, 1, IssueUpdate{Status: IssueStatusSubmitted})
 	require.Error(t, err)
@@ -466,14 +484,20 @@ func TestUpdateIssue_ParentNotOwned(t *testing.T) {
 func TestGetPrompt(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, promptUUID := storePrompt(t, repo, user, contextID)
 
 	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
 	require.NoError(t, err)
-	assert.Equal(t, strconv.Itoa(promptID), prompt.ID)
+	assert.Equal(t, promptID, prompt.ID)
+	assert.Equal(t, promptUUID, prompt.UUID)
 	assert.Equal(t, "prompt", prompt.Prompt)
 	assert.Equal(t, "result", prompt.Result)
 	assert.Equal(t, "c1", prompt.Context.Name)
+
+	byUUID, err := repo.GetPromptByUUID(t.Context(), user, promptUUID)
+	require.NoError(t, err)
+	assert.Equal(t, promptID, byUUID.ID)
 }
 
 func TestGetPrompt_NotFound(t *testing.T) {
@@ -489,9 +513,14 @@ func TestGetPrompt_NotOwned(t *testing.T) {
 	repo := newRepository(t)
 	owner := storeUser(t, repo, "owner@email.com")
 	other := storeUser(t, repo, "other@email.com")
-	promptID := storePrompt(t, repo, owner, storeContext(t, repo, owner, "c1"))
+	contextID, _ := storeContext(t, repo, owner, "c1")
+	promptID, promptUUID := storePrompt(t, repo, owner, contextID)
 
 	_, err := repo.GetPrompt(t.Context(), other, promptID)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrPromptNotFound))
+
+	_, err = repo.GetPromptByUUID(t.Context(), other, promptUUID)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrPromptNotFound))
 }
@@ -523,7 +552,8 @@ func TestGetUserByID_NotFound(t *testing.T) {
 func TestSetPromptProcessing(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 
 	err := repo.SetPromptProcessing(t.Context(), user, promptID, "full prompt")
 	require.NoError(t, err)
@@ -546,7 +576,8 @@ func TestSetPromptProcessing_NotFound(t *testing.T) {
 func TestCompletePrompt(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 
 	err := repo.CompletePrompt(t.Context(), user, promptID, PromptComplete{
 		Status: PromptStatusDone,
@@ -566,7 +597,8 @@ func TestCompletePrompt(t *testing.T) {
 func TestCompletePrompt_Error(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 
 	err := repo.CompletePrompt(t.Context(), user, promptID, PromptComplete{
 		Status: PromptStatusError,
@@ -711,7 +743,8 @@ func TestResetOrphanedTasks(t *testing.T) {
 func TestGetIssue(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
 	require.NoError(t, err)
 
@@ -725,7 +758,8 @@ func TestGetIssue(t *testing.T) {
 func TestGetIssue_NotFound(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
-	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
 
 	_, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, 999)
 	require.Error(t, err)
@@ -736,7 +770,8 @@ func TestGetIssue_ParentNotOwned(t *testing.T) {
 	repo := newRepository(t)
 	owner := storeUser(t, repo, "owner@email.com")
 	other := storeUser(t, repo, "other@email.com")
-	promptID := storePrompt(t, repo, owner, storeContext(t, repo, owner, "c1"))
+	contextID, _ := storeContext(t, repo, owner, "c1")
+	promptID, _ := storePrompt(t, repo, owner, contextID)
 
 	_, err := repo.GetIssue(t.Context(), other, IssueParentPrompt, promptID, 1)
 	require.Error(t, err)

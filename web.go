@@ -208,11 +208,7 @@ func (a api) prompt() http.HandlerFunc {
 			return
 		}
 
-		id, err := strconv.Atoi(r.PathValue("id"))
-		if err != nil {
-			WriteError(w, "invalid prompt id", http.StatusBadRequest, err)
-			return
-		}
+		id := r.PathValue("id")
 
 		view, err := a.controller.GetPrompt(r.Context(), user, id)
 		if err != nil {
@@ -318,11 +314,7 @@ func (a api) deleteContext() http.HandlerFunc {
 			return
 		}
 
-		id, err := strconv.Atoi(r.PathValue("id"))
-		if err != nil {
-			WriteError(w, "invalid context id", http.StatusBadRequest, err)
-			return
-		}
+		id := r.PathValue("id")
 
 		if err := a.controller.DeleteContext(r.Context(), user, id); err != nil {
 			switch {
@@ -375,7 +367,9 @@ func (a api) createPrompt() http.HandlerFunc {
 			return
 		}
 
-		contextID, err := strconv.Atoi(r.Form.Get("context_id"))
+		contextUUID := r.Form.Get("context_id")
+
+		context, err := a.controller.ResolveContext(r.Context(), user, contextUUID)
 		if err != nil {
 			WriteError(w, "invalid context", http.StatusBadRequest, err)
 			return
@@ -402,7 +396,7 @@ func (a api) createPrompt() http.HandlerFunc {
 			return
 		}
 
-		promptID, err := a.controller.CreatePrompt(r.Context(), user, provider, name, contextID, string(meeting))
+		promptUUID, err := a.controller.CreatePrompt(r.Context(), user, provider, name, context.ID, string(meeting))
 		if err != nil {
 			if errors.Is(err, ErrModelNotFound) {
 				WriteError(w, "llm model not found", http.StatusNotFound, err)
@@ -412,7 +406,7 @@ func (a api) createPrompt() http.HandlerFunc {
 			return
 		}
 
-		redirectPath := strings.Replace(a.components.endpoints.prompt.Path(), "{id}", strconv.Itoa(promptID), 1)
+		redirectPath := strings.Replace(a.components.endpoints.prompt.Path(), "{id}", promptUUID, 1)
 		http.Redirect(w, r, redirectPath, http.StatusSeeOther)
 	}
 }
@@ -422,22 +416,6 @@ func parseDate(s string) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	return time.Parse("2006-01-02", s)
-}
-
-func (a api) issueParams(w http.ResponseWriter, r *http.Request) (promptID, issueID int, ok bool) {
-	issueID, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		WriteError(w, "invalid issue id", http.StatusBadRequest, err)
-		return 0, 0, false
-	}
-
-	promptID, err = strconv.Atoi(r.Form.Get("prompt_id"))
-	if err != nil {
-		WriteError(w, "invalid prompt id", http.StatusBadRequest, err)
-		return 0, 0, false
-	}
-
-	return promptID, issueID, true
 }
 
 func parseIssueFields(r *http.Request) IssueUpdateView {
@@ -456,17 +434,21 @@ func parseIssueFields(r *http.Request) IssueUpdateView {
 	}
 }
 
-func (a api) renderIssueCard(ctx context.Context, w http.ResponseWriter, user User, promptID, issueID int, projects []ProjectOptionView, errMsg string) {
-	view, err := a.controller.GetPrompt(ctx, user, promptID)
+func (a api) renderIssueCard(ctx context.Context, w http.ResponseWriter, user User, issueUUID string, projects []ProjectOptionView, errMsg string) {
+	view, err := a.controller.GetPromptViewForIssue(ctx, user, issueUUID)
 	if err != nil {
+		if errors.Is(err, ErrIssueNotFound) || errors.Is(err, ErrParentDoesNotBelongToUser) {
+			WriteError(w, "issue not found", http.StatusNotFound, nil)
+			return
+		}
 		WriteError(w, "failed to load prompt", http.StatusInternalServerError, err)
 		return
 	}
 
 	for _, iss := range view.Issues {
-		if iss.ID == issueID {
+		if iss.ID == issueUUID {
 			iss.Error = errMsg
-			a.components.IssueCard(iss, strconv.Itoa(promptID), projects, a.controller.Users).Render(w)
+			a.components.IssueCard(iss, projects, a.controller.Users).Render(w)
 			return
 		}
 	}
@@ -487,18 +469,15 @@ func (a api) updateIssue() http.HandlerFunc {
 			return
 		}
 
-		promptID, issueID, ok := a.issueParams(w, r)
-		if !ok {
-			return
-		}
+		issueUUID := r.PathValue("id")
 
 		v := parseIssueFields(r)
 
-		if err := a.controller.UpdateIssue(r.Context(), user, promptID, issueID, v); err != nil {
+		if err := a.controller.UpdateIssue(r.Context(), user, issueUUID, v); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
 				projects, _ := a.controller.ListProjects(r.Context(), user)
-				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
@@ -506,14 +485,14 @@ func (a api) updateIssue() http.HandlerFunc {
 			default:
 				projects, _ := a.controller.ListProjects(r.Context(), user)
 				w.Header().Set("X-Error", "Failed to update issue")
-				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "Failed to update issue")
+				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Failed to update issue")
 				return
 			}
 		}
 
 		withSuccessToast(w)
 		projects, _ := a.controller.ListProjects(r.Context(), user)
-		a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "")
+		a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
 	}
 }
 
@@ -530,50 +509,47 @@ func (a api) submitIssue() http.HandlerFunc {
 			return
 		}
 
-		promptID, issueID, ok := a.issueParams(w, r)
-		if !ok {
-			return
-		}
+		issueUUID := r.PathValue("id")
 
 		v := parseIssueFields(r)
 		projects, _ := a.controller.ListProjects(r.Context(), user)
 
-		if err := a.controller.UpdateIssue(r.Context(), user, promptID, issueID, v); err != nil {
+		if err := a.controller.UpdateIssue(r.Context(), user, issueUUID, v); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
-				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			default:
 				w.Header().Set("X-Error", "Failed to update issue")
-				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "Failed to update issue")
+				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Failed to update issue")
 				return
 			}
 		}
 
-		if err := a.controller.SubmitIssue(r.Context(), user, promptID, issueID); err != nil {
+		if err := a.controller.SubmitIssue(r.Context(), user, issueUUID); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
-				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			case errors.Is(err, ErrIssueIncomplete):
 				w.Header().Set("X-Error", "Cannot submit: missing required fields")
-				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "Cannot submit: missing required fields")
+				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Cannot submit: missing required fields")
 				return
 			default:
 				w.Header().Set("X-Error", "Failed to submit issue")
-				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "Failed to submit issue")
+				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Failed to submit issue")
 				return
 			}
 		}
 
 		withSuccessToast(w)
-		a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "")
+		a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
 	}
 }
 
@@ -703,22 +679,22 @@ func (c components) promptRow(it PromptListItem) g.Node {
 				g.Text("All submitted"),
 			)
 		} else {
-			issues = h.Span(h.Class("text-sm text-gray-500"), g.Text(fmt.Sprintf("%d / %d submitted", it.SubmittedIssues, it.TotalIssues)))
+			issues = h.Span(h.Class("text-sm text-gray-500 text-center"), g.Text(fmt.Sprintf("%d / %d submitted", it.SubmittedIssues, it.TotalIssues)))
 		}
 	}
 
 	return h.A(
 		h.Href(path),
 		h.Div(
-			h.Class("mb-2 border rounded px-3 py-2 flex items-center justify-between gap-4 hover:bg-gray-100"),
+			h.Class("border hover:bg-gray-100 grid grid-rows-4 justify-center lg:grid-rows-1 lg:grid-cols-4 rounded px-3 py-2 items-center"),
 			h.Div(
 				h.Class("block min-w-0"),
-				h.Div(h.Class("font-medium"), g.Text("Prompt #"+it.ID)),
+				h.Div(h.Class("font-small"), g.Text(it.ID)),
 				h.Div(h.Class("text-sm text-gray-500 truncate"), g.Text(it.ContextName)),
 			),
-			h.Div(h.Class("text-sm text-gray-500 whitespace-nowrap"), g.Text(it.CreatedAt.Format("2006-01-02 15:04"))),
+			h.Div(h.Class("text-sm text-gray-500 whitespace-nowrap text-center"), g.Text(it.CreatedAt.Format("2006-01-02 15:04"))),
 			h.Span(
-				h.Class("whitespace-nowrap "+statusClass),
+				h.Class("whitespace-nowrap text-center "+statusClass),
 				g.Text(statusText),
 			),
 			issues,
@@ -852,7 +828,7 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel) g.N
 
 	contextOpts := []g.Node{}
 	for _, cx := range contexts {
-		contextOpts = append(contextOpts, h.Option(h.Value(strconv.Itoa(cx.ID)), g.Text(cx.Name)))
+		contextOpts = append(contextOpts, h.Option(h.Value(cx.ID), g.Text(cx.Name)))
 	}
 
 	return h.Div(
@@ -933,7 +909,7 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 
 	issueCards := []g.Node{}
 	for _, iss := range view.Issues {
-		issueCards = append(issueCards, c.IssueCard(iss, view.ID, projects, users))
+		issueCards = append(issueCards, c.IssueCard(iss, projects, users))
 	}
 
 	nodes := []g.Node{
@@ -999,8 +975,8 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 	return h.Div(h.ID("prompt-view"), h.Class("flex flex-col gap-4"), g.Group(nodes))
 }
 
-func (c components) IssueCard(iss IssueView, promptID string, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
-	cardID := "issue-" + strconv.Itoa(iss.ID)
+func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+	cardID := "issue-" + iss.ID
 
 	if !iss.Editable {
 		status := g.Group([]g.Node{
@@ -1054,15 +1030,14 @@ func (c components) IssueCard(iss IssueView, promptID string, projects []Project
 		userOpts = append(userOpts, h.Option(opts...))
 	}
 
-	updatePath := strings.Replace(c.endpoints.updateIssue.Path(), "{id}", strconv.Itoa(iss.ID), 1)
-	submitPath := strings.Replace(c.endpoints.submitIssue.Path(), "{id}", strconv.Itoa(iss.ID), 1)
-	indicator := "#submit-indicator-" + strconv.Itoa(iss.ID)
+	updatePath := strings.Replace(c.endpoints.updateIssue.Path(), "{id}", iss.ID, 1)
+	submitPath := strings.Replace(c.endpoints.submitIssue.Path(), "{id}", iss.ID, 1)
+	indicator := "#submit-indicator-" + iss.ID
 
 	return h.Form(
 		h.ID(cardID),
 		h.Class("border rounded p-4 space-y-3"),
 		g.If(iss.Error != "", h.Div(h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-3 py-2 text-sm"), g.Text(iss.Error))),
-		h.Input(h.Type("hidden"), h.Name("prompt_id"), h.Value(promptID)),
 		h.Input(h.Type("text"), h.Name("subject"), h.Value(iss.Subject), h.Required(), h.Class("w-full px-3 py-2 border rounded font-medium")),
 		h.Textarea(h.Name("description"), h.Rows("2"), h.Class("w-full px-3 py-2 border rounded"), g.Text(iss.Description)),
 
@@ -1110,7 +1085,7 @@ func (c components) IssueCard(iss IssueView, promptID string, projects []Project
 				htmx.Indicator(indicator),
 			),
 			h.Span(
-				h.ID("submit-indicator-"+strconv.Itoa(iss.ID)),
+				h.ID("submit-indicator-"+iss.ID),
 				h.Class("htmx-indicator inline-flex items-center gap-1 text-sm text-gray-500"),
 				solid.ArrowPath(h.Class("h-4 w-4 animate-spin")),
 				g.Text("Submitting..."),
@@ -1128,7 +1103,7 @@ func (c components) ContextRow(cx ContextView) g.Node {
 		),
 		c.DeleteButton(
 			h.Type("button"),
-			htmx.Delete(strings.Replace(c.endpoints.deleteContext.Path(), "{id}", strconv.Itoa(cx.ID), 1)),
+			htmx.Delete(strings.Replace(c.endpoints.deleteContext.Path(), "{id}", cx.ID, 1)),
 			htmx.Target("closest .context-row"),
 			htmx.Swap("outerHTML swap:0.2s"),
 			htmx.Confirm("Delete this context?"),

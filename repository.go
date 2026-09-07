@@ -104,7 +104,7 @@ func NewRepository(path string) (*TxProvider, Repository, error) {
 	return txp, repo, nil
 }
 
-func (r *RepositorySqlite) StorePrompt(ctx context.Context, user User, obj PromptCreate) (int, error) {
+func (r *RepositorySqlite) StorePrompt(ctx context.Context, user User, obj PromptCreate) (int, string, error) {
 	var errStr string
 	if obj.Error != nil {
 		errStr = obj.Error.Error()
@@ -118,26 +118,33 @@ func (r *RepositorySqlite) StorePrompt(ctx context.Context, user User, obj Promp
 		obj.CreatedAt = CurrentTime()
 	}
 
-	query := `INSERT INTO prompts (prompt, result, error, context_id, user_id, status, provider, model, file_content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	result, execErr := r.DB.ExecContext(ctx, query, obj.Prompt, obj.Result, errStr, obj.ContextID, user.ID, obj.Status, obj.Provider, obj.Model, obj.FileContent, obj.CreatedAt)
+	uuid := newUUID()
+
+	query := `INSERT INTO prompts (uuid, prompt, result, error, context_id, user_id, status, provider, model, file_content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	result, execErr := r.DB.ExecContext(ctx, query, uuid, obj.Prompt, obj.Result, errStr, obj.ContextID, user.ID, obj.Status, obj.Provider, obj.Model, obj.FileContent, obj.CreatedAt)
 	if execErr != nil {
-		return 0, fmt.Errorf("failed to store prompt: %w", execErr)
+		return 0, "", fmt.Errorf("failed to store prompt: %w", execErr)
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get last insert id: %w", err)
+		return 0, "", fmt.Errorf("failed to get last insert id: %w", err)
 	}
 
-	return int(id), nil
+	return int(id), uuid, nil
 }
+
+const promptSelect = `
+SELECT p.id, p.uuid, p.prompt, p.result, p.error, p.status, p.provider, p.model, p.file_content, p.created_at, c.id, c.uuid, c.name, c.context
+FROM prompts p
+JOIN contexts c ON p.context_id = c.id`
 
 func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User, limit, offset int) ([]Prompt, bool, error) {
 	prompts := []Prompt{}
 
 	rows, err := r.DB.QueryContext(ctx, `
 	SELECT
-	p.id, p.prompt, p.result, p.error, p.status, p.provider, p.model, p.file_content, p.created_at, c.id, c.name, c.context,
+	p.id, p.uuid, p.prompt, p.result, p.error, p.status, p.provider, p.model, p.file_content, p.created_at, c.id, c.uuid, c.name, c.context,
 	(SELECT COUNT(*) FROM issues i WHERE i.parent = 'prompt' AND i.parent_id = p.id) AS total_issues,
 	(SELECT COUNT(*) FROM issues i WHERE i.parent = 'prompt' AND i.parent_id = p.id AND i.status = 'submitted') AS submitted_issues
 	FROM prompts p
@@ -154,7 +161,7 @@ func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User, limit, of
 
 	for rows.Next() {
 		p := Prompt{}
-		if err := rows.Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.CreatedAt, &p.Context.ID, &p.Context.Name, &p.Context.Context, &p.TotalIssues, &p.SubmittedIssues); err != nil {
+		if err := rows.Scan(&p.ID, &p.UUID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.CreatedAt, &p.Context.ID, &p.Context.UUID, &p.Context.Name, &p.Context.Context, &p.TotalIssues, &p.SubmittedIssues); err != nil {
 			return nil, false, fmt.Errorf("when scanning results: %w", err)
 		}
 		prompts = append(prompts, p)
@@ -175,12 +182,24 @@ func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User, limit, of
 
 func (r *RepositorySqlite) GetPrompt(ctx context.Context, user User, id int) (Prompt, error) {
 	p := Prompt{}
-	err := r.DB.QueryRowContext(ctx, `
-	SELECT p.id, p.prompt, p.result, p.error, p.status, p.provider, p.model, p.file_content, p.created_at, c.id, c.name, c.context
-	FROM prompts p
-	JOIN contexts c ON p.context_id = c.id
+	err := r.DB.QueryRowContext(ctx, promptSelect+`
 	WHERE p.id = ? AND p.user_id = ?
-	`, id, user.ID).Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.CreatedAt, &p.Context.ID, &p.Context.Name, &p.Context.Context)
+	`, id, user.ID).Scan(&p.ID, &p.UUID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.CreatedAt, &p.Context.ID, &p.Context.UUID, &p.Context.Name, &p.Context.Context)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Prompt{}, ErrPromptNotFound
+		}
+		return Prompt{}, fmt.Errorf("when getting prompt: %w", err)
+	}
+
+	return p, nil
+}
+
+func (r *RepositorySqlite) GetPromptByUUID(ctx context.Context, user User, uuid string) (Prompt, error) {
+	p := Prompt{}
+	err := r.DB.QueryRowContext(ctx, promptSelect+`
+	WHERE p.uuid = ? AND p.user_id = ?
+	`, uuid, user.ID).Scan(&p.ID, &p.UUID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.CreatedAt, &p.Context.ID, &p.Context.UUID, &p.Context.Name, &p.Context.Context)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Prompt{}, ErrPromptNotFound
@@ -335,7 +354,7 @@ func (r *RepositorySqlite) ListProjects(ctx context.Context, user User) (Project
 func (r *RepositorySqlite) ListContexts(ctx context.Context, user User) ([]LLMContext, error) {
 	contexts := []LLMContext{}
 
-	rows, err := r.DB.QueryContext(ctx, "SELECT id, name, context FROM contexts WHERE user_id = ?", user.ID)
+	rows, err := r.DB.QueryContext(ctx, "SELECT id, uuid, name, context FROM contexts WHERE user_id = ?", user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("when listing contexts")
 	}
@@ -343,7 +362,7 @@ func (r *RepositorySqlite) ListContexts(ctx context.Context, user User) ([]LLMCo
 
 	for rows.Next() {
 		c := LLMContext{}
-		if err := rows.Scan(&c.ID, &c.Name, &c.Context); err != nil {
+		if err := rows.Scan(&c.ID, &c.UUID, &c.Name, &c.Context); err != nil {
 			return nil, fmt.Errorf("when scanning results: %w", err)
 		}
 		contexts = append(contexts, c)
@@ -356,23 +375,27 @@ func (r *RepositorySqlite) ListContexts(ctx context.Context, user User) ([]LLMCo
 	return contexts, nil
 }
 
-func (r *RepositorySqlite) StoreContext(ctx context.Context, user User, c LLMContextCreate) (int, error) {
-	result, execErr := r.DB.ExecContext(ctx, "INSERT INTO contexts (context, name, user_id) VALUES (?, ?, ?)", c.Context, c.Name, user.ID)
+func (r *RepositorySqlite) StoreContext(ctx context.Context, user User, c LLMContextCreate) (int, string, error) {
+	uuid := newUUID()
+
+	result, execErr := r.DB.ExecContext(ctx, "INSERT INTO contexts (uuid, context, name, user_id) VALUES (?, ?, ?, ?)", uuid, c.Context, c.Name, user.ID)
 	if execErr != nil {
-		return 0, fmt.Errorf("failed to insert context: %w", execErr)
+		return 0, "", fmt.Errorf("failed to insert context: %w", execErr)
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get last insert id: %w", err)
+		return 0, "", fmt.Errorf("failed to get last insert id: %w", err)
 	}
 
-	return int(id), nil
+	return int(id), uuid, nil
 }
+
+const contextCols = "id, uuid, name, context"
 
 func (r *RepositorySqlite) GetContext(ctx context.Context, user User, id int) (LLMContext, error) {
 	c := LLMContext{}
-	if err := r.DB.QueryRowContext(ctx, "SELECT id, name, context from contexts WHERE id = ? AND user_id = ?", id, user.ID).Scan(&c.ID, &c.Name, &c.Context); err != nil {
+	if err := r.DB.QueryRowContext(ctx, "SELECT "+contextCols+" from contexts WHERE id = ? AND user_id = ?", id, user.ID).Scan(&c.ID, &c.UUID, &c.Name, &c.Context); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return LLMContext{}, ErrContextNotFound
 		}
@@ -382,13 +405,26 @@ func (r *RepositorySqlite) GetContext(ctx context.Context, user User, id int) (L
 	return c, nil
 }
 
-func (r *RepositorySqlite) DeleteContext(ctx context.Context, user User, id int) error {
-	if _, err := r.GetContext(ctx, user, id); err != nil {
+func (r *RepositorySqlite) GetContextByUUID(ctx context.Context, user User, uuid string) (LLMContext, error) {
+	c := LLMContext{}
+	if err := r.DB.QueryRowContext(ctx, "SELECT "+contextCols+" from contexts WHERE uuid = ? AND user_id = ?", uuid, user.ID).Scan(&c.ID, &c.UUID, &c.Name, &c.Context); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return LLMContext{}, ErrContextNotFound
+		}
+		return LLMContext{}, fmt.Errorf("when fetching context: %w", err)
+	}
+
+	return c, nil
+}
+
+func (r *RepositorySqlite) DeleteContextByUUID(ctx context.Context, user User, uuid string) error {
+	c, err := r.GetContextByUUID(ctx, user, uuid)
+	if err != nil {
 		return err
 	}
 
 	var count int
-	if err := r.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM prompts WHERE context_id = ? AND user_id = ?", id, user.ID).Scan(&count); err != nil {
+	if err := r.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM prompts WHERE context_id = ? AND user_id = ?", c.ID, user.ID).Scan(&count); err != nil {
 		return fmt.Errorf("when checking prompt usage of context: %w", err)
 	}
 
@@ -396,7 +432,7 @@ func (r *RepositorySqlite) DeleteContext(ctx context.Context, user User, id int)
 		return ErrContextInUse
 	}
 
-	if _, err := r.DB.ExecContext(ctx, "DELETE FROM contexts WHERE id = ? AND user_id = ?", id, user.ID); err != nil {
+	if _, err := r.DB.ExecContext(ctx, "DELETE FROM contexts WHERE id = ? AND user_id = ?", c.ID, user.ID); err != nil {
 		return fmt.Errorf("when deleting context: %w", err)
 	}
 
@@ -530,8 +566,10 @@ func (r *RepositorySqlite) UpdateUser(ctx context.Context, u User, obj UserUpdat
 }
 
 func (r *RepositorySqlite) StoreIssue(ctx context.Context, user User, issue IssueCreate) (int, error) {
-	query := `INSERT INTO issues (parent, parent_id, subject, description, project_id, start_date, due_date, assigned_to_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	result, execErr := r.DB.ExecContext(ctx, query, issue.Parent, issue.ParentID, issue.Subject, issue.Description, issue.ProjectID, issue.StartDate, issue.DueDate, issue.AssignedToID, IssueStatusCreated)
+	uuid := newUUID()
+
+	query := `INSERT INTO issues (uuid, parent, parent_id, subject, description, project_id, start_date, due_date, assigned_to_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	result, execErr := r.DB.ExecContext(ctx, query, uuid, issue.Parent, issue.ParentID, issue.Subject, issue.Description, issue.ProjectID, issue.StartDate, issue.DueDate, issue.AssignedToID, IssueStatusCreated)
 	if execErr != nil {
 		return 0, fmt.Errorf("failed to store issue: %w", execErr)
 	}
@@ -543,6 +581,8 @@ func (r *RepositorySqlite) StoreIssue(ctx context.Context, user User, issue Issu
 
 	return int(id), nil
 }
+
+const issueCols = "id, uuid, status, parent, parent_id, subject, description, project_id, start_date, due_date, assigned_to_id, projektove_id"
 
 func (r *RepositorySqlite) parentBelongsToUser(ctx context.Context, user User, parent IssueParent, parentID int) (bool, error) {
 	table := ""
@@ -605,14 +645,14 @@ func (r *RepositorySqlite) ListIssues(ctx context.Context, user User, parent Iss
 		return nil, ErrParentDoesNotBelongToUser
 	}
 
-	rows, err := r.DB.QueryContext(ctx, "SELECT id, status, parent, parent_id, subject, description, project_id, start_date, due_date, assigned_to_id, projektove_id FROM issues WHERE parent = ? AND parent_id = ?", parent, parentID)
+	rows, err := r.DB.QueryContext(ctx, "SELECT "+issueCols+" FROM issues WHERE parent = ? AND parent_id = ?", parent, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("when listing issues: %w", err)
 	}
 
 	for rows.Next() {
 		i := Issue{}
-		if err := rows.Scan(&i.ID, &i.Status, &i.Parent, &i.ParentID, &i.Subject, &i.Description, &i.ProjectID, &i.StartDate, &i.DueDate, &i.AssignedToID, &i.ProjektoveID); err != nil {
+		if err := rows.Scan(&i.ID, &i.UUID, &i.Status, &i.Parent, &i.ParentID, &i.Subject, &i.Description, &i.ProjectID, &i.StartDate, &i.DueDate, &i.AssignedToID, &i.ProjektoveID); err != nil {
 			return nil, fmt.Errorf("when scanning results: %w", err)
 		}
 		issues = append(issues, i)
@@ -636,7 +676,7 @@ func (r *RepositorySqlite) GetIssue(ctx context.Context, user User, parent Issue
 	}
 
 	i := Issue{}
-	err = r.DB.QueryRowContext(ctx, "SELECT id, status, parent, parent_id, subject, description, project_id, start_date, due_date, assigned_to_id, projektove_id FROM issues WHERE parent = ? AND parent_id = ? AND id = ?", parent, parentID, id).Scan(&i.ID, &i.Status, &i.Parent, &i.ParentID, &i.Subject, &i.Description, &i.ProjectID, &i.StartDate, &i.DueDate, &i.AssignedToID, &i.ProjektoveID)
+	err = r.DB.QueryRowContext(ctx, "SELECT "+issueCols+" FROM issues WHERE parent = ? AND parent_id = ? AND id = ?", parent, parentID, id).Scan(&i.ID, &i.UUID, &i.Status, &i.Parent, &i.ParentID, &i.Subject, &i.Description, &i.ProjectID, &i.StartDate, &i.DueDate, &i.AssignedToID, &i.ProjektoveID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Issue{}, ErrIssueNotFound
@@ -645,4 +685,25 @@ func (r *RepositorySqlite) GetIssue(ctx context.Context, user User, parent Issue
 	}
 
 	return i, nil
+}
+
+func (r *RepositorySqlite) GetIssueByUUID(ctx context.Context, user User, uuid string) (Issue, error) {
+	row := Issue{}
+	err := r.DB.QueryRowContext(ctx, "SELECT "+issueCols+" FROM issues WHERE uuid = ?", uuid).Scan(&row.ID, &row.UUID, &row.Status, &row.Parent, &row.ParentID, &row.Subject, &row.Description, &row.ProjectID, &row.StartDate, &row.DueDate, &row.AssignedToID, &row.ProjektoveID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Issue{}, ErrIssueNotFound
+		}
+		return Issue{}, fmt.Errorf("when getting issue: %w", err)
+	}
+
+	belongs, err := r.parentBelongsToUser(ctx, user, row.Parent, row.ParentID)
+	if err != nil {
+		return Issue{}, fmt.Errorf("when checking if parent belongs to user: %w", err)
+	}
+	if !belongs {
+		return Issue{}, ErrParentDoesNotBelongToUser
+	}
+
+	return row, nil
 }

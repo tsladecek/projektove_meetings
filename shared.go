@@ -6,10 +6,16 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func CurrentTime() time.Time {
 	return time.Now().UTC()
+}
+
+func newUUID() string {
+	return uuid.NewString()
 }
 
 func WriteError(w http.ResponseWriter, message string, status int, err error) {
