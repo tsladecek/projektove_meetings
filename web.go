@@ -956,7 +956,7 @@ func (c components) BatchesList(view BatchListView) g.Node {
 		rows = append(rows, c.loadMoreButton(c.endpoints.batches.Path()+"?offset="+strconv.Itoa(view.NextOffset)))
 	}
 
-	return h.Div(g.Group(rows))
+	return h.Div(g.Group(rows), h.Class("flex flex-col gap-2"))
 }
 
 func (c components) batchRow(it BatchListItem) g.Node {
