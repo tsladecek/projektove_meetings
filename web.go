@@ -747,34 +747,46 @@ func (c components) Page(body g.Node) g.Node {
 type navLink struct {
 	label string
 	href  string
+	icon  g.Node
 }
 
 func (c components) Sidebar() g.Node {
-	links := []navLink{
-		{label: "User", href: c.endpoints.user.Path()},
-
-		{label: "New prompt", href: c.endpoints.newPrompt.Path()},
-		{label: "Prompts", href: c.endpoints.prompts.Path()},
-
-		{label: "New batch", href: c.endpoints.newBatch.Path()},
-		{label: "Batches", href: c.endpoints.batches.Path()},
+	groups := [][]navLink{
+		{
+			{label: "User", href: c.endpoints.user.Path(), icon: solid.User(h.Class("h-5 w-5 shrink-0"))},
+		},
+		{
+			{label: "New prompt", href: c.endpoints.newPrompt.Path(), icon: solid.PlusCircle(h.Class("h-5 w-5 shrink-0"))},
+			{label: "Prompts", href: c.endpoints.prompts.Path(), icon: solid.DocumentText(h.Class("h-5 w-5 shrink-0"))},
+		},
+		{
+			{label: "New batch", href: c.endpoints.newBatch.Path(), icon: solid.ArrowUpTray(h.Class("h-5 w-5 shrink-0"))},
+			{label: "Batches", href: c.endpoints.batches.Path(), icon: solid.CircleStack(h.Class("h-5 w-5 shrink-0"))},
+		},
 	}
 
-	navItems := []g.Node{}
-	for _, l := range links {
-		navItems = append(navItems, h.A(
-			h.Href(l.href),
-			h.Class("block px-4 py-2 rounded hover:bg-gray-700"),
-			g.Text(l.label),
-		))
+	navBlocks := []g.Node{}
+	for i, grp := range groups {
+		if i > 0 {
+			navBlocks = append(navBlocks, h.Hr(h.Class("border-gray-700 my-2")))
+		}
+
+		items := []g.Node{}
+		for _, l := range grp {
+			items = append(items, h.A(
+				h.Href(l.href),
+				h.Title(l.label),
+				h.Class("flex items-center justify-center md:justify-start gap-3 w-full px-2 py-2 rounded hover:bg-gray-700"),
+				l.icon,
+				h.Span(h.Class("hidden md:inline"), g.Text(l.label)),
+			))
+		}
+		navBlocks = append(navBlocks, h.Nav(h.Class("space-y-1 w-full"), g.Group(items)))
 	}
 
 	return h.Aside(
-		h.Class("w-56 bg-gray-800 text-white flex flex-col p-4"),
-		h.Nav(
-			h.Class("space-y-1"),
-			g.Group(navItems),
-		),
+		h.Class("w-16 md:w-56 bg-gray-800 text-white flex flex-col items-center md:items-stretch p-4"),
+		g.Group(navBlocks),
 	)
 }
 
@@ -964,7 +976,7 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 			htmx.Target("#models-list"),
 			htmx.Swap("beforeend"),
 			htmx.On("htmx:after:request", "this.reset()"),
-			h.Class("grid grid-cols-[1fr_1fr_1fr_auto] gap-2 mt-4"),
+			h.Class("grid grid-rows-4 lg:grid-cols-[1fr_1fr_1fr_auto] gap-2 mt-4"),
 			h.Select(h.Name("provider"), h.Placeholder("provider"), h.Class("px-2 py-1 border rounded"), h.Required(), h.Option(h.Value("googleai"), g.Text("google"))),
 			h.Input(h.Type("text"), h.Name("model"), h.Placeholder("model"), h.Class("px-2 py-1 border rounded"), h.Required()),
 			h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
@@ -1411,7 +1423,7 @@ func (c components) ContextRow(cx ContextView) g.Node {
 
 func (c components) ModelRow(m LLMModelView) g.Node {
 	return h.Div(
-		h.Class("model-row flex gap-2 items-center border rounded px-3 py-2"),
+		h.Class("model-row flex gap-2 items-center border rounded px-3 py-2 overflow-auto"),
 		h.Input(h.Type("text"), h.Name("model_provider"), h.Value(string(m.Provider)), h.Class("flex-1 px-2 py-1 border rounded")),
 		h.Input(h.Type("text"), h.Name("model_name"), h.Value(m.Model), h.Class("flex-1 px-2 py-1 border rounded")),
 		h.Input(h.Type("text"), h.Name("model_token"), h.Value(m.Token), h.Class("flex-1 px-2 py-1 border rounded")),

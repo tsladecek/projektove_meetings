@@ -59,9 +59,9 @@ func parseBatchCSV(raw string, projects []ProjektoveProject, users []ProjektoveU
 	for _, p := range projects {
 		projectIDs[p.ID] = true
 	}
-	userIDs := make(map[int]bool, len(users))
+	userIDs := make(map[string]int, len(users))
 	for _, u := range users {
-		userIDs[u.ID] = true
+		userIDs[u.Name] = u.ID
 	}
 
 	objs := []IssueCreate{}
@@ -113,11 +113,9 @@ func parseBatchCSV(raw string, projects []ProjektoveProject, users []ProjektoveU
 			assigneeRaw = cellAt(record, c)
 		}
 		if assigneeRaw != "" {
-			assigneeID, err := strconv.Atoi(assigneeRaw)
-			if err != nil {
-				rowMsgs = append(rowMsgs, fmt.Sprintf("assignee %q is not a valid number", assigneeRaw))
-			} else if !userIDs[assigneeID] {
-				rowMsgs = append(rowMsgs, fmt.Sprintf("assignee id %d does not exist in Projektove", assigneeID))
+			assigneeID, found := userIDs[assigneeRaw]
+			if !found {
+				rowMsgs = append(rowMsgs, fmt.Sprintf("assignee %q not found", assigneeRaw))
 			} else {
 				obj.AssignedToID = assigneeID
 			}

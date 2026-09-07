@@ -11,7 +11,7 @@ import (
 
 func validCSV() string {
 	return "Subject, Description, Project, Start date, Due date, Assignee\n" +
-		"task one, some details, 1, 2026-01-01, 2026-02-01, 1\n" +
+		"task one, some details, 1, 2026-01-01, 2026-02-01, u1\n" +
 		"task two, , 2, 2026-03-01, 2026-04-01, \n"
 }
 
@@ -87,7 +87,7 @@ func TestParseBatchCSV_RowErrors(t *testing.T) {
 	assert.Contains(t, csvErr.Messages[0], "must use YYYY-MM-DD")
 	assert.Contains(t, csvErr.Messages[1], "row 3")
 	assert.Contains(t, csvErr.Messages[1], "project id 99 does not exist")
-	assert.Contains(t, csvErr.Messages[1], "assignee id 99 does not exist")
+	assert.Contains(t, csvErr.Messages[1], "assignee \"99\" not found")
 	assert.Contains(t, csvErr.Messages[2], "row 4")
 	assert.Contains(t, csvErr.Messages[2], "must use YYYY-MM-DD")
 }
