@@ -82,10 +82,11 @@ func RunMigrations(db *sql.DB) error {
 
 // NewRepository connects to (or creates) the SQLite database and executes the migration.
 func NewRepository(path string) (*TxProvider, Repository, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open sqlite database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 
 	if err := db.Ping(); err != nil {
 		db.Close()

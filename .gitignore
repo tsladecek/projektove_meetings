@@ -1,5 +1,5 @@
 *.toml
 *.txt
-*.sqlite
+*.sqlite*
 examples
 tmp
