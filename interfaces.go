@@ -54,7 +54,7 @@ type Repository interface {
 }
 
 type Auth interface {
-	Authenticate(ctx context.Context, token string) (User, error)
+	Authenticate(ctx context.Context, idToken, refreshToken string) (User, AuthTokenResult, error)
 	RegisterRoutes(m *http.ServeMux)
 	Middleware(next http.Handler) http.Handler
 }

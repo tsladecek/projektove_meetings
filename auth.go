@@ -17,6 +17,7 @@ type AuthOIDC struct {
 	verifier          *oidc.IDTokenVerifier
 	provider          *oidc.Provider
 	idTokenCookieName string
+	refreshCookieName string
 	baseURL           string
 	issuer            string
 
@@ -56,11 +57,17 @@ func NewAuth(repo Repository, config ConfigOIDC, baseURLRaw string) (Auth, error
 		Scopes: []string{oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail},
 	}
 
+	refreshTokenCookieName := config.RefreshTokenCookieName
+	if refreshTokenCookieName == "" {
+		refreshTokenCookieName = config.IDTokenCookieName + "_refresh"
+	}
+
 	return AuthOIDC{
 		repo:              repo,
 		verifier:          provider.Verifier(&oidc.Config{ClientID: config.ClientID}),
 		provider:          provider,
 		idTokenCookieName: config.IDTokenCookieName,
+		refreshCookieName: refreshTokenCookieName,
 		callbackEndpoint:  config.CallbackEndpoint,
 		oauth2Config:      oauth2Config,
 		loginURL:          oauth2Config.AuthCodeURL(""),
@@ -74,7 +81,36 @@ type oidcClaims struct {
 	Email string `json:"email"`
 }
 
-func (a AuthOIDC) Authenticate(ctx context.Context, token string) (User, error) {
+type AuthTokenResult struct {
+	IDToken      string
+	RefreshToken string
+}
+
+func (a AuthOIDC) Authenticate(ctx context.Context, idToken, refreshToken string) (User, AuthTokenResult, error) {
+	user, err := a.authenticateWithIDToken(ctx, idToken)
+	if err == nil {
+		return user, AuthTokenResult{}, nil
+	}
+
+	if refreshToken == "" {
+		return User{}, AuthTokenResult{}, err
+	}
+
+	refreshedIDToken, rotatedRefreshToken, refreshErr := a.refresh(ctx, refreshToken)
+	if refreshErr != nil {
+		slog.Debug("Token refresh failed", "error", refreshErr.Error())
+		return User{}, AuthTokenResult{}, fmt.Errorf("when refreshing session (id token verification failed: %v): %w", err, refreshErr)
+	}
+
+	user, err = a.authenticateWithIDToken(ctx, refreshedIDToken)
+	if err != nil {
+		return User{}, AuthTokenResult{}, err
+	}
+
+	return user, AuthTokenResult{IDToken: refreshedIDToken, RefreshToken: rotatedRefreshToken}, nil
+}
+
+func (a AuthOIDC) authenticateWithIDToken(ctx context.Context, token string) (User, error) {
 	idToken, err := a.verifier.Verify(ctx, token)
 	if err != nil {
 		return User{}, fmt.Errorf("when verifying id token: %w", err)
@@ -108,6 +144,21 @@ func (a AuthOIDC) Authenticate(ctx context.Context, token string) (User, error) 
 	}
 
 	return user, nil
+}
+
+func (a AuthOIDC) refresh(ctx context.Context, refreshToken string) (string, string, error) {
+	src := a.oauth2Config.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken})
+	tok, err := src.Token()
+	if err != nil {
+		return "", "", fmt.Errorf("when exchanging refresh token: %w", err)
+	}
+
+	rawIDToken, ok := tok.Extra("id_token").(string)
+	if !ok {
+		return "", "", errors.New("token refresh response is missing the id token")
+	}
+
+	return rawIDToken, tok.RefreshToken, nil
 }
 
 type ctxKey string
@@ -156,13 +207,10 @@ func (a AuthOIDC) RegisterRoutes(m *http.ServeMux) {
 			return
 		}
 
-		http.SetCookie(w, &http.Cookie{
-			Name:     a.idTokenCookieName,
-			Value:    url.QueryEscape(rawIDToken),
-			Path:     "/",
-			HttpOnly: true,
-			Secure:   true,
-		})
+		setAuthCookie(w, a.idTokenCookieName, rawIDToken)
+		if oauth2Token.RefreshToken != "" {
+			setAuthCookie(w, a.refreshCookieName, oauth2Token.RefreshToken)
+		}
 		slog.Debug("Authentication Successful")
 		http.Redirect(w, r, a.baseURL, http.StatusFound)
 	})
@@ -177,28 +225,60 @@ func (a AuthOIDC) RegisterRoutes(m *http.ServeMux) {
 		}
 
 		idTokenHint = idTokenCookie.Value
-		http.SetCookie(w, &http.Cookie{Name: a.idTokenCookieName, Path: "/", Value: "", MaxAge: -1, HttpOnly: true, Secure: true})
+		a.clearCookies(w)
 		http.Redirect(w, r, fmt.Sprintf("%s/protocol/openid-connect/logout?id_token_hint=%s&post_logout_redirect_uri=%s", a.issuer, idTokenHint, url.QueryEscape(a.loginURL)), http.StatusFound)
 	})
 }
 
+func setAuthCookie(w http.ResponseWriter, name, value string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    url.QueryEscape(value),
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+	})
+}
+
+func (a AuthOIDC) clearCookies(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: a.idTokenCookieName, Path: "/", Value: "", MaxAge: -1, HttpOnly: true, Secure: true})
+	http.SetCookie(w, &http.Cookie{Name: a.refreshCookieName, Path: "/", Value: "", MaxAge: -1, HttpOnly: true, Secure: true})
+}
+
 func (a AuthOIDC) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(a.idTokenCookieName)
-		if err != nil {
-			slog.Debug("ID token cookie not found")
+		idTokenCookie, idErr := r.Cookie(a.idTokenCookieName)
+		refreshCookie, refreshErr := r.Cookie(a.refreshCookieName)
+		if idErr != nil && refreshErr != nil {
+			slog.Debug("No authentication cookies found")
 			http.Redirect(w, r, a.loginURL, http.StatusFound)
 			return
 		}
 
-		slog.Debug("Cookie found. Authenticating")
-		user, err := a.Authenticate(r.Context(), cookie.Value)
+		idToken := ""
+		if idErr == nil {
+			idToken = idTokenCookie.Value
+		}
+		refreshToken := ""
+		if refreshErr == nil {
+			refreshToken = refreshCookie.Value
+		}
+
+		user, result, err := a.Authenticate(r.Context(), idToken, refreshToken)
 		if err != nil {
 			slog.Debug("Authentication failed", "error", err.Error())
-			http.SetCookie(w, &http.Cookie{Name: a.idTokenCookieName, Path: "/", Value: "", MaxAge: -1, HttpOnly: true, Secure: true})
+			a.clearCookies(w)
 			http.Redirect(w, r, a.loginURL, http.StatusFound)
 			return
 		}
+
+		if result.IDToken != "" {
+			setAuthCookie(w, a.idTokenCookieName, result.IDToken)
+		}
+		if result.RefreshToken != "" {
+			setAuthCookie(w, a.refreshCookieName, result.RefreshToken)
+		}
+
 		slog.Debug("Authentication successful")
 
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))

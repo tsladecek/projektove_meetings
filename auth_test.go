@@ -16,6 +16,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 )
 
 func createUser(t *testing.T, repo Repository, email string) User {
@@ -67,6 +68,7 @@ func authVerifier(t *testing.T, clientID string) (*oidc.IDTokenVerifier, string)
 	providerJSON := map[string]any{
 		"issuer":                                realIssuer,
 		"jwks_uri":                              realIssuer + "/keys",
+		"token_endpoint":                        realIssuer + "/token",
 		"response_types_supported":              []string{"code", "id_token"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
@@ -78,6 +80,45 @@ func authVerifier(t *testing.T, clientID string) (*oidc.IDTokenVerifier, string)
 	mux.HandleFunc("/keys", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, jwks)
 	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		rawIDToken := signToken(t, realIssuer, testClientID, testEmail, testKid)
+		switch r.Form.Get("grant_type") {
+		case "authorization_code":
+			if r.Form.Get("code") != testAuthCode {
+				w.WriteHeader(http.StatusBadRequest)
+				writeJSON(t, w, map[string]any{"error": "invalid_grant"})
+				return
+			}
+			writeJSON(t, w, map[string]any{
+				"access_token":  "access-token",
+				"token_type":    "Bearer",
+				"expires_in":    300,
+				"refresh_token": testInitialRefreshToken,
+				"id_token":      rawIDToken,
+			})
+		case "refresh_token":
+			if r.Form.Get("refresh_token") != testRefreshToken {
+				w.WriteHeader(http.StatusBadRequest)
+				writeJSON(t, w, map[string]any{"error": "invalid_grant"})
+				return
+			}
+			writeJSON(t, w, map[string]any{
+				"access_token":  "new-access-token",
+				"token_type":    "Bearer",
+				"expires_in":    300,
+				"refresh_token": testRotatedRefreshToken,
+				"id_token":      rawIDToken,
+			})
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(t, w, map[string]any{"error": "unsupported_grant_type"})
+		}
+	})
 
 	provider, err := oidc.NewProvider(context.Background(), realIssuer)
 	require.NoError(t, err)
@@ -86,13 +127,17 @@ func authVerifier(t *testing.T, clientID string) (*oidc.IDTokenVerifier, string)
 }
 
 func signToken(t *testing.T, issuer, clientID, email, kid string) string {
+	return signTokenExp(t, issuer, clientID, email, kid, time.Now().Add(time.Hour))
+}
+
+func signTokenExp(t *testing.T, issuer, clientID, email, kid string, exp time.Time) string {
 	t.Helper()
 	claims := jwt.MapClaims{
 		"iss":   issuer,
 		"aud":   clientID,
 		"sub":   email,
 		"email": email,
-		"exp":   time.Now().Add(time.Hour).Unix(),
+		"exp":   exp.Unix(),
 		"iat":   time.Now().Unix(),
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
@@ -120,9 +165,13 @@ func bigEndian(n int) []byte {
 }
 
 const (
-	testClientID = "client-id"
-	testEmail    = "user@example.com"
-	testKid      = "test-kid"
+	testClientID            = "client-id"
+	testEmail               = "user@example.com"
+	testKid                 = "test-kid"
+	testAuthCode            = "auth-code"
+	testRefreshToken        = "valid-refresh-token"
+	testRotatedRefreshToken = "rotated-refresh-token"
+	testInitialRefreshToken = "initial-refresh"
 )
 
 func TestAuthenticate_Success(t *testing.T) {
@@ -132,7 +181,7 @@ func TestAuthenticate_Success(t *testing.T) {
 	auth := AuthOIDC{repo: repo, verifier: verifier}
 
 	token := signToken(t, issuer, testClientID, testEmail, testKid)
-	user, err := auth.Authenticate(t.Context(), token)
+	user, _, err := auth.Authenticate(t.Context(), token, "")
 	require.NoError(t, err)
 	assert.Equal(t, testEmail, user.Email)
 	assert.NotZero(t, user.ID)
@@ -145,7 +194,7 @@ func TestAuthenticate_AutoProvision(t *testing.T) {
 	auth := AuthOIDC{repo: repo, verifier: verifier}
 
 	token := signToken(t, issuer, testClientID, newEmail, testKid)
-	user, err := auth.Authenticate(t.Context(), token)
+	user, _, err := auth.Authenticate(t.Context(), token, "")
 	require.NoError(t, err)
 	assert.Equal(t, newEmail, user.Email)
 	assert.NotZero(t, user.ID)
@@ -161,7 +210,7 @@ func TestAuthenticate_InvalidToken(t *testing.T) {
 	verifier, _ := authVerifier(t, testClientID)
 	auth := AuthOIDC{repo: repo, verifier: verifier}
 
-	_, err := auth.Authenticate(t.Context(), "not-a-token")
+	_, _, err := auth.Authenticate(t.Context(), "not-a-token", "")
 	require.Error(t, err)
 }
 
@@ -172,7 +221,7 @@ func TestAuthenticate_WrongAudience(t *testing.T) {
 	auth := AuthOIDC{repo: repo, verifier: verifier}
 
 	token := signToken(t, issuer, "other-client", testEmail, testKid)
-	_, err := auth.Authenticate(t.Context(), token)
+	_, _, err := auth.Authenticate(t.Context(), token, "")
 	require.Error(t, err)
 }
 
@@ -180,7 +229,7 @@ func TestMiddlewareAuth_ValidCookie(t *testing.T) {
 	repo := newRepository(t)
 	createUser(t, repo, testEmail)
 	verifier, issuer := authVerifier(t, testClientID)
-	auth := AuthOIDC{repo: repo, verifier: verifier, idTokenCookieName: "token"}
+	auth := AuthOIDC{repo: repo, verifier: verifier, idTokenCookieName: "token", refreshCookieName: "refresh"}
 
 	token := signToken(t, issuer, testClientID, testEmail, testKid)
 
@@ -220,7 +269,7 @@ func TestMiddlewareAuth_MissingCookie(t *testing.T) {
 func TestMiddlewareAuth_InvalidToken(t *testing.T) {
 	repo := newRepository(t)
 	verifier, _ := authVerifier(t, testClientID)
-	auth := AuthOIDC{repo: repo, verifier: verifier, idTokenCookieName: "token", loginURL: "/login"}
+	auth := AuthOIDC{repo: repo, verifier: verifier, idTokenCookieName: "token", refreshCookieName: "refresh", loginURL: "/login"}
 
 	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
 	req.AddCookie(&http.Cookie{Name: "token", Value: "garbage"})
@@ -233,4 +282,151 @@ func TestMiddlewareAuth_InvalidToken(t *testing.T) {
 
 	assert.Equal(t, http.StatusFound, rec.Code)
 	assert.Equal(t, "/login", rec.Header().Get("Location"))
+}
+
+func authOIDCWithTokenEndpoint(t *testing.T, repo Repository) AuthOIDC {
+	t.Helper()
+	verifier, issuer := authVerifier(t, testClientID)
+	return AuthOIDC{
+		repo:              repo,
+		verifier:          verifier,
+		idTokenCookieName: "token",
+		refreshCookieName: "refresh",
+		loginURL:          "/login",
+		oauth2Config: oauth2.Config{
+			ClientID:     testClientID,
+			ClientSecret: "secret",
+			Endpoint:     oauth2.Endpoint{TokenURL: issuer + "/token"},
+		},
+	}
+}
+
+func TestAuthenticate_RefreshExpiredIDToken(t *testing.T) {
+	repo := newRepository(t)
+	createUser(t, repo, testEmail)
+	auth := authOIDCWithTokenEndpoint(t, repo)
+
+	expired := signTokenExp(t, "", testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
+	user, result, err := auth.Authenticate(t.Context(), expired, testRefreshToken)
+	require.NoError(t, err)
+	assert.Equal(t, testEmail, user.Email)
+	assert.NotEmpty(t, result.IDToken)
+	assert.Equal(t, testRotatedRefreshToken, result.RefreshToken)
+
+	_, err = auth.verifier.Verify(t.Context(), result.IDToken)
+	require.NoError(t, err)
+}
+
+func TestAuthenticate_RefreshFails(t *testing.T) {
+	repo := newRepository(t)
+	createUser(t, repo, testEmail)
+	auth := authOIDCWithTokenEndpoint(t, repo)
+
+	expired := signTokenExp(t, "", testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
+	_, _, err := auth.Authenticate(t.Context(), expired, "bad-refresh-token")
+	require.Error(t, err)
+}
+
+func TestMiddlewareAuth_RefreshesExpiredToken(t *testing.T) {
+	repo := newRepository(t)
+	createUser(t, repo, testEmail)
+	auth := authOIDCWithTokenEndpoint(t, repo)
+
+	expired := signTokenExp(t, "", testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
+
+	var gotUser User
+	var gotOK bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotOK = UserFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
+	req.AddCookie(&http.Cookie{Name: "token", Value: expired})
+	req.AddCookie(&http.Cookie{Name: "refresh", Value: testRefreshToken})
+	rec := httptest.NewRecorder()
+
+	auth.Middleware(next).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, gotOK)
+	assert.Equal(t, testEmail, gotUser.Email)
+
+	var idCookieVal, refreshCookieVal string
+	for _, c := range rec.Result().Cookies() {
+		switch c.Name {
+		case "token":
+			idCookieVal = c.Value
+		case "refresh":
+			refreshCookieVal = c.Value
+		}
+	}
+	assert.NotEmpty(t, idCookieVal)
+	assert.NotEqual(t, expired, idCookieVal)
+	assert.Equal(t, testRotatedRefreshToken, refreshCookieVal)
+}
+
+func TestMiddlewareAuth_RefreshFails(t *testing.T) {
+	repo := newRepository(t)
+	createUser(t, repo, testEmail)
+	auth := authOIDCWithTokenEndpoint(t, repo)
+
+	expired := signTokenExp(t, "", testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
+
+	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
+	req.AddCookie(&http.Cookie{Name: "token", Value: expired})
+	req.AddCookie(&http.Cookie{Name: "refresh", Value: "bad-refresh-token"})
+	rec := httptest.NewRecorder()
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	auth.Middleware(next).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusFound, rec.Code)
+	assert.Equal(t, "/login", rec.Header().Get("Location"))
+	for _, c := range rec.Result().Cookies() {
+		assert.Equal(t, "", c.Value)
+	}
+}
+
+func TestCallback_SetsRefreshCookie(t *testing.T) {
+	repo := newRepository(t)
+	verifier, issuer := authVerifier(t, testClientID)
+	auth := AuthOIDC{
+		repo:              repo,
+		verifier:          verifier,
+		idTokenCookieName: "token",
+		refreshCookieName: "refresh",
+		callbackEndpoint:  "/oauth2/callback",
+		logoutEndoint:     "/oauth2/logout",
+		baseURL:           "http://app.test",
+		oauth2Config: oauth2.Config{
+			ClientID:     testClientID,
+			ClientSecret: "secret",
+			Endpoint:     oauth2.Endpoint{TokenURL: issuer + "/token"},
+		},
+	}
+
+	mux := http.NewServeMux()
+	auth.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, auth.callbackEndpoint+"?code="+testAuthCode, nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusFound, rec.Code)
+
+	var idCookieVal, refreshCookieVal string
+	for _, c := range rec.Result().Cookies() {
+		switch c.Name {
+		case "token":
+			idCookieVal = c.Value
+		case "refresh":
+			refreshCookieVal = c.Value
+		}
+	}
+	assert.NotEmpty(t, idCookieVal)
+	assert.Equal(t, testInitialRefreshToken, refreshCookieVal)
 }

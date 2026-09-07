@@ -25,12 +25,13 @@ type ConfigLogging struct {
 }
 
 type ConfigOIDC struct {
-	Issuer            string `toml:"issuer" env:"ISSUER" env-required:"true"`
-	ClientID          string `toml:"client_id" env:"CLIENTID" env-required:"true"`
-	ClientSecret      string `toml:"client_secret" env:"CLIENTSECRET" env-required:"true"`
-	IDTokenCookieName string `toml:"id_token_cookie_name" env:"IDTOKENCOOKIENAME" env-required:"true"`
-	CallbackEndpoint  string `toml:"callback_endpoint" env:"CALLBACKENDPOINT" env-default:"/oauth2/callback"`
-	LogoutEndpoint    string `toml:"logout_endpoint" env:"LOGOUTENDPOINT" env-default:"/oauth2/logout"`
+	Issuer                 string `toml:"issuer" env:"ISSUER" env-required:"true"`
+	ClientID               string `toml:"client_id" env:"CLIENTID" env-required:"true"`
+	ClientSecret           string `toml:"client_secret" env:"CLIENTSECRET" env-required:"true"`
+	IDTokenCookieName      string `toml:"id_token_cookie_name" env:"IDTOKENCOOKIENAME" env-required:"true"`
+	RefreshTokenCookieName string `toml:"refresh_token_cookie_name" env:"REFRESHTOKENCOOKIENAME" env-default:""`
+	CallbackEndpoint       string `toml:"callback_endpoint" env:"CALLBACKENDPOINT" env-default:"/oauth2/callback"`
+	LogoutEndpoint         string `toml:"logout_endpoint" env:"LOGOUTENDPOINT" env-default:"/oauth2/logout"`
 }
 
 type ConfigProjektove struct {
