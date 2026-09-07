@@ -16,6 +16,7 @@ var (
 	ErrBatchNotFound                      = errors.New("batch not found")
 	ErrBatchCSVInvalid                    = errors.New("batch csv is invalid")
 	ErrIssueSubmitted                     = errors.New("issue already submitted")
+	ErrIssueDeleted                       = errors.New("issue is deleted")
 	ErrModelNotFound                      = errors.New("model not found")
 	ErrParentDoesNotBelongToUser          = errors.New("parent does not belong to user")
 	ErrIssueIncomplete                    = errors.New("issue is missing required fields")

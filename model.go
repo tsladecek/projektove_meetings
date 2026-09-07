@@ -34,6 +34,7 @@ const (
 	IssueStatusCreated      IssueStatus = "created"
 	IssueStatusSubmitted    IssueStatus = "submitted"
 	IssueStatusSubmitFailed IssueStatus = "submit_failed"
+	IssueStatusDeleted      IssueStatus = "deleted"
 )
 
 type PromptStatus string

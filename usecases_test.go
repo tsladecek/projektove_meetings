@@ -257,6 +257,140 @@ func TestSubmitIssue_Incomplete(t *testing.T) {
 	assert.Equal(t, IssueStatusCreated, got.Status)
 }
 
+func TestDeleteIssue(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, promptUUID := storePrompt(t, repo, user, contextID)
+	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+	err = c.DeleteIssue(t.Context(), user, iss.UUID)
+	require.NoError(t, err)
+
+	got, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
+	require.NoError(t, err)
+	assert.Equal(t, IssueStatusDeleted, got.Status)
+	assert.Nil(t, got.ProjektoveID)
+
+	view, err := c.GetPrompt(t.Context(), user, promptUUID)
+	require.NoError(t, err)
+	require.Len(t, view.Issues, 1)
+	assert.Equal(t, IssueStatusDeleted, view.Issues[0].Status)
+	assert.False(t, view.Issues[0].Editable)
+}
+
+func TestDeleteIssue_Submitted(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
+	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
+	require.NoError(t, err)
+
+	projektoveID := 42
+	require.NoError(t, repo.UpdateIssue(t.Context(), user, IssueParentPrompt, promptID, issueID, IssueUpdate{
+		Subject:      "subject",
+		Description:  "description",
+		ProjectID:    1,
+		Status:       IssueStatusSubmitted,
+		ProjektoveID: &projektoveID,
+	}))
+
+	c := Controller{Repository: repo}
+	err = c.DeleteIssue(t.Context(), user, iss.UUID)
+	assert.True(t, errors.Is(err, ErrIssueSubmitted))
+
+	got, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
+	require.NoError(t, err)
+	assert.Equal(t, IssueStatusSubmitted, got.Status)
+	require.NotNil(t, got.ProjektoveID)
+	assert.Equal(t, projektoveID, *got.ProjektoveID)
+}
+
+func TestDeleteIssue_NotFound(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	c := Controller{Repository: repo}
+	err := c.DeleteIssue(t.Context(), user, "does-not-exist")
+	assert.True(t, errors.Is(err, ErrIssueNotFound))
+}
+
+func TestDeleteIssue_Idempotent(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
+	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.UpdateIssue(t.Context(), user, IssueParentPrompt, promptID, issueID, IssueUpdate{
+		Subject:     "subject",
+		Description: "description",
+		ProjectID:   1,
+		Status:      IssueStatusDeleted,
+	}))
+
+	c := Controller{Repository: repo}
+	err = c.DeleteIssue(t.Context(), user, iss.UUID)
+	require.NoError(t, err)
+}
+
+func TestUpdateIssue_Deleted(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
+	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.UpdateIssue(t.Context(), user, IssueParentPrompt, promptID, issueID, IssueUpdate{
+		Subject:     "subject",
+		Description: "description",
+		ProjectID:   1,
+		Status:      IssueStatusDeleted,
+	}))
+
+	c := Controller{Repository: repo}
+	err = c.UpdateIssue(t.Context(), user, iss.UUID, IssueUpdateView{Subject: "nope"})
+	assert.True(t, errors.Is(err, ErrIssueDeleted))
+}
+
+func TestSubmitIssue_Deleted(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
+	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.UpdateIssue(t.Context(), user, IssueParentPrompt, promptID, issueID, IssueUpdate{
+		Subject:     "subject",
+		Description: "description",
+		ProjectID:   1,
+		Status:      IssueStatusDeleted,
+	}))
+
+	p := &fakeProjektove{}
+	c := Controller{Repository: repo, Projektove: p}
+
+	err = c.SubmitIssue(t.Context(), user, iss.UUID)
+	assert.True(t, errors.Is(err, ErrIssueDeleted))
+	assert.Empty(t, p.created)
+}
+
 func TestControllerListPrompts(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")

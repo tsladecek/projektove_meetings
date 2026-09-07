@@ -74,6 +74,7 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 
 		updateIssue: endAPI(http.MethodPut, "/issues/{id}"),
 		submitIssue: endAPI(http.MethodPost, "/issues/{id}/submit"),
+		deleteIssue: endAPI(http.MethodDelete, "/issues/{id}"),
 	}
 
 	c := components{endpoints: e, projektoveIssueEndpoint: projektoveIssueEndpoint}
@@ -107,6 +108,7 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 		{endpoint: e.createBatch, handler: a.createBatch()},
 		{endpoint: e.updateIssue, handler: a.updateIssue()},
 		{endpoint: e.submitIssue, handler: a.submitIssue()},
+		{endpoint: e.deleteIssue, handler: a.deleteIssue()},
 	} {
 		m.Handle(eh.endpoint.Pattern(), auth.Middleware(eh.handler))
 	}
@@ -683,6 +685,40 @@ func (a api) submitIssue() http.HandlerFunc {
 	}
 }
 
+func (a api) deleteIssue() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		issueUUID := r.PathValue("id")
+		projects, _ := a.controller.ListProjects(r.Context(), user)
+
+		if err := a.controller.DeleteIssue(r.Context(), user, issueUUID); err != nil {
+			switch {
+			case errors.Is(err, ErrIssueSubmitted):
+				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				return
+			case errors.Is(err, ErrIssueDeleted):
+				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				return
+			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
+				WriteError(w, "issue not found", http.StatusNotFound, nil)
+				return
+			default:
+				w.Header().Set("X-Error", "Failed to delete issue")
+				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				return
+			}
+		}
+
+		withSuccessToast(w)
+		a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+	}
+}
+
 type endpoints struct {
 	root   Endpoint
 	static Endpoint
@@ -709,6 +745,7 @@ type endpoints struct {
 
 	updateIssue Endpoint
 	submitIssue Endpoint
+	deleteIssue Endpoint
 }
 
 type components struct {
@@ -1390,6 +1427,22 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 	cardID := "issue-" + iss.ID
 
 	if !iss.Editable {
+		if iss.Status == IssueStatusDeleted {
+			return h.Div(
+				h.ID(cardID),
+				h.Class("border rounded p-4 flex items-start justify-between"),
+				h.Div(
+					h.Div(h.Class("font-medium"), g.Text(iss.Subject)),
+					h.Div(h.Class("text-sm text-gray-500"), g.Text(iss.Description)),
+				),
+				h.Div(
+					h.Class("flex items-center gap-2 text-gray-500 text-sm"),
+					solid.Trash(h.Class("h-5 w-5")),
+					g.Text("Deleted"),
+				),
+			)
+		}
+
 		status := g.Group([]g.Node{
 			solid.CheckCircle(h.Class("h-5 w-5 text-green-600")),
 			g.Text("Submitted"),
@@ -1443,6 +1496,7 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 
 	updatePath := strings.Replace(c.endpoints.updateIssue.Path(), "{id}", iss.ID, 1)
 	submitPath := strings.Replace(c.endpoints.submitIssue.Path(), "{id}", iss.ID, 1)
+	deletePath := strings.Replace(c.endpoints.deleteIssue.Path(), "{id}", iss.ID, 1)
 	indicator := "#submit-indicator-" + iss.ID
 
 	return h.Form(
@@ -1500,6 +1554,14 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 				h.Class("htmx-indicator inline-flex items-center gap-1 text-sm text-gray-500"),
 				solid.ArrowPath(h.Class("h-4 w-4 animate-spin")),
 				g.Text("Submitting..."),
+			),
+			h.Div(h.Class("flex-1")),
+			c.DeleteButton(
+				h.Type("button"),
+				htmx.Delete(deletePath),
+				htmx.Target("#"+cardID),
+				htmx.Swap("outerHTML"),
+				htmx.Confirm("Delete this issue?"),
 			),
 		),
 	)
