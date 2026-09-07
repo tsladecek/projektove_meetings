@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS issues (
     project_id INTEGER NOT NULL,
     start_date TIMESTAMP NOT NULL,
     due_date TIMESTAMP,
-    assigned_to_id INTEGER NOT NULL,
+    assigned_to_id INTEGER,
     status TEXT CHECK (status IN ('created', 'submitted', 'submit_failed')),
     projektove_id INTEGER,
     parent TEXT NOT NULL CHECK (parent IN ('prompt', 'batch')),

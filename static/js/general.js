@@ -47,6 +47,16 @@ document.addEventListener("htmx:after:request", (e) => {
 });
 
 function submitAll() {
+  let firstInvalid = null;
+  document.querySelectorAll("form[id^='issue-']").forEach((form) => {
+    if (!form.checkValidity() && !firstInvalid) {
+      firstInvalid = form;
+    }
+  });
+  if (firstInvalid) {
+    firstInvalid.reportValidity();
+    return;
+  }
   document.querySelectorAll("[data-submit-issue]").forEach((btn) => {
     btn.disabled = true;
     htmx.trigger(btn, "click");

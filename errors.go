@@ -12,4 +12,5 @@ var (
 	ErrIssueSubmitted                  = errors.New("issue already submitted")
 	ErrModelNotFound                   = errors.New("model not found")
 	ErrParentDoesNotBelongToUser       = errors.New("parent does not belong to user")
+	ErrIssueIncomplete                 = errors.New("issue is missing required fields")
 )

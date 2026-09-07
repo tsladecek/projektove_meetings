@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 type Controller struct {
@@ -152,10 +153,10 @@ func buildInferencePrompt(projects []ProjektoveProject, users []ProjektoveUser, 
 	},
 	"assigned_to_id": {
 	  "type": "number",
-	  "description": "id of the person to assign the issue to. You can infer this from the users array above. Leave it empty if not sure"
+	  "description": "id of the person to assign the issue to, inferred from the Users array above. Leave it empty if you cannot determine the person"
 	},
   },
-  "required": ["subject", "description", "assigned_to_id"],
+  "required": ["subject"],
   "additionalProperties": true
 }
 
@@ -386,6 +387,26 @@ func (c Controller) SubmitIssue(ctx context.Context, user User, promptID, issueI
 
 	if isSubmitted(iss.Status) {
 		return ErrIssueSubmitted
+	}
+
+	var missing []string
+	if iss.Subject == "" {
+		missing = append(missing, "subject")
+	}
+	if iss.ProjectID == 0 {
+		missing = append(missing, "project")
+	}
+	if iss.AssignedToID == 0 {
+		missing = append(missing, "assignee")
+	}
+	if iss.StartDate.IsZero() {
+		missing = append(missing, "start date")
+	}
+	if iss.DueDate.IsZero() {
+		missing = append(missing, "due date")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: %s", ErrIssueIncomplete, strings.Join(missing, ", "))
 	}
 
 	obj := ProjektoveIssueCreate{

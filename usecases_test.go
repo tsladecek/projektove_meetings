@@ -206,6 +206,35 @@ func TestSubmitIssue_Submitted(t *testing.T) {
 	assert.Empty(t, p.created)
 }
 
+func TestSubmitIssue_Incomplete(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+
+	require.NoError(t, repo.UpdateIssue(t.Context(), user, IssueParentPrompt, promptID, issueID, IssueUpdate{
+		Subject:      "subject",
+		Description:  "description",
+		ProjectID:    1,
+		StartDate:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		DueDate:      time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+		AssignedToID: 0,
+		Status:       IssueStatusCreated,
+	}))
+
+	p := &fakeProjektove{}
+	c := Controller{Repository: repo, Projektove: p}
+
+	err = c.SubmitIssue(t.Context(), user, promptID, issueID)
+	assert.True(t, errors.Is(err, ErrIssueIncomplete))
+	assert.Empty(t, p.created)
+
+	got, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
+	require.NoError(t, err)
+	assert.Equal(t, IssueStatusCreated, got.Status)
+}
+
 func TestControllerListPrompts(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")

@@ -440,6 +440,22 @@ func (a api) issueParams(w http.ResponseWriter, r *http.Request) (promptID, issu
 	return promptID, issueID, true
 }
 
+func parseIssueFields(r *http.Request) IssueUpdateView {
+	projectID, _ := strconv.Atoi(r.Form.Get("project_id"))
+	assigneeID, _ := strconv.Atoi(r.Form.Get("assigned_to_id"))
+	startDate, _ := parseDate(r.Form.Get("start_date"))
+	dueDate, _ := parseDate(r.Form.Get("due_date"))
+
+	return IssueUpdateView{
+		Subject:      r.Form.Get("subject"),
+		Description:  r.Form.Get("description"),
+		ProjectID:    projectID,
+		AssignedToID: assigneeID,
+		StartDate:    startDate,
+		DueDate:      dueDate,
+	}
+}
+
 func (a api) renderIssueCard(ctx context.Context, w http.ResponseWriter, user User, promptID, issueID int, projects []ProjectOptionView, errMsg string) {
 	view, err := a.controller.GetPrompt(ctx, user, promptID)
 	if err != nil {
@@ -476,27 +492,7 @@ func (a api) updateIssue() http.HandlerFunc {
 			return
 		}
 
-		projectID, err := strconv.Atoi(r.Form.Get("project_id"))
-		if err != nil {
-			WriteError(w, "invalid project id", http.StatusBadRequest, err)
-			return
-		}
-		assigneeID, err := strconv.Atoi(r.Form.Get("assigned_to_id"))
-		if err != nil {
-			WriteError(w, "invalid assignee id", http.StatusBadRequest, err)
-			return
-		}
-		startDate, _ := parseDate(r.Form.Get("start_date"))
-		dueDate, _ := parseDate(r.Form.Get("due_date"))
-
-		v := IssueUpdateView{
-			Subject:      r.Form.Get("subject"),
-			Description:  r.Form.Get("description"),
-			ProjectID:    projectID,
-			AssignedToID: assigneeID,
-			StartDate:    startDate,
-			DueDate:      dueDate,
-		}
+		v := parseIssueFields(r)
 
 		if err := a.controller.UpdateIssue(r.Context(), user, promptID, issueID, v); err != nil {
 			switch {
@@ -539,7 +535,23 @@ func (a api) submitIssue() http.HandlerFunc {
 			return
 		}
 
+		v := parseIssueFields(r)
 		projects, _ := a.controller.ListProjects(r.Context(), user)
+
+		if err := a.controller.UpdateIssue(r.Context(), user, promptID, issueID, v); err != nil {
+			switch {
+			case errors.Is(err, ErrIssueSubmitted):
+				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "")
+				return
+			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
+				WriteError(w, "issue not found", http.StatusNotFound, nil)
+				return
+			default:
+				w.Header().Set("X-Error", "Failed to update issue")
+				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "Failed to update issue")
+				return
+			}
+		}
 
 		if err := a.controller.SubmitIssue(r.Context(), user, promptID, issueID); err != nil {
 			switch {
@@ -548,6 +560,10 @@ func (a api) submitIssue() http.HandlerFunc {
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
+				return
+			case errors.Is(err, ErrIssueIncomplete):
+				w.Header().Set("X-Error", "Cannot submit: missing required fields")
+				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "Cannot submit: missing required fields")
 				return
 			default:
 				w.Header().Set("X-Error", "Failed to submit issue")
@@ -1011,9 +1027,9 @@ func (c components) IssueCard(iss IssueView, promptID string, projects []Project
 
 	projectOpts := []g.Node{}
 	if iss.ProjectID == 0 {
-		projectOpts = append(projectOpts, h.Option(h.Value("0"), h.Selected(), g.Text("No project")))
+		projectOpts = append(projectOpts, h.Option(h.Value(""), h.Disabled(), h.Selected(), g.Text("Select project")))
 	} else {
-		projectOpts = append(projectOpts, h.Option(h.Value("0"), g.Text("No project")))
+		projectOpts = append(projectOpts, h.Option(h.Value(""), h.Disabled(), g.Text("Select project")))
 	}
 	for _, p := range projects {
 		opts := []g.Node{h.Value(strconv.Itoa(p.ID)), g.Text(p.Name)}
@@ -1025,9 +1041,9 @@ func (c components) IssueCard(iss IssueView, promptID string, projects []Project
 
 	userOpts := []g.Node{}
 	if iss.AssignedToID == 0 {
-		userOpts = append(userOpts, h.Option(h.Value("0"), h.Selected(), g.Text("Unassigned")))
+		userOpts = append(userOpts, h.Option(h.Value(""), h.Disabled(), h.Selected(), g.Text("Select user")))
 	} else {
-		userOpts = append(userOpts, h.Option(h.Value("0"), g.Text("Unassigned")))
+		userOpts = append(userOpts, h.Option(h.Value(""), h.Disabled(), g.Text("Select user")))
 	}
 	for _, u := range users {
 		opts := []g.Node{h.Value(strconv.Itoa(u.ID)), g.Text(u.Name)}
@@ -1054,22 +1070,22 @@ func (c components) IssueCard(iss IssueView, promptID string, projects []Project
 			h.Div(
 				h.Class("space-y-1"),
 				h.Label(h.Class("block text-sm text-gray-500"), g.Text("Project")),
-				h.Select(h.Name("project_id"), h.Class("w-full px-3 py-2 border rounded"), g.Group(projectOpts)),
+				h.Select(h.Name("project_id"), h.Class("w-full px-3 py-2 border rounded"), g.Group(projectOpts), h.Required()),
 			),
 			h.Div(
 				h.Class("space-y-1"),
 				h.Label(h.Class("block text-sm text-gray-500"), g.Text("Assignee")),
-				h.Select(h.Name("assigned_to_id"), h.Class("w-full px-3 py-2 border rounded"), g.Group(userOpts)),
+				h.Select(h.Name("assigned_to_id"), h.Class("w-full px-3 py-2 border rounded"), g.Group(userOpts), h.Required()),
 			),
 			h.Div(
 				h.Class("space-y-1"),
 				h.Label(h.Class("block text-sm text-gray-500"), g.Text("Start date")),
-				h.Input(h.Type("date"), h.Name("start_date"), h.Value(dateValue(iss.StartDate)), h.Class("w-full px-3 py-2 border rounded")),
+				h.Input(h.Type("date"), h.Name("start_date"), h.Value(dateValue(iss.StartDate)), h.Class("w-full px-3 py-2 border rounded"), h.Required()),
 			),
 			h.Div(
 				h.Class("space-y-1"),
 				h.Label(h.Class("block text-sm text-gray-500"), g.Text("Due date")),
-				h.Input(h.Type("date"), h.Name("due_date"), h.Value(dateValue(iss.DueDate)), h.Class("w-full px-3 py-2 border rounded")),
+				h.Input(h.Type("date"), h.Name("due_date"), h.Value(dateValue(iss.DueDate)), h.Class("w-full px-3 py-2 border rounded"), h.Required()),
 			),
 		),
 
@@ -1083,7 +1099,7 @@ func (c components) IssueCard(iss IssueView, promptID string, projects []Project
 				htmx.Swap("outerHTML"),
 			),
 			c.SubmitButton(
-				h.Type("button"),
+				h.Type("submit"),
 				g.Attr("data-submit-issue", ""),
 				htmx.Post(submitPath),
 				htmx.Include("closest form"),
