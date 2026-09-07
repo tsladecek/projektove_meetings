@@ -325,7 +325,12 @@ func TestControllerCreatePrompt_EnqueuesTask(t *testing.T) {
 	require.NoError(t, err)
 	contextID, _ := storeContext(t, repo, user, "c1")
 
-	c := Controller{Repository: repo, TxProvider: txp, Users: ProjektoveUsers{{ID: 1, Name: "u1"}}}
+	c := Controller{
+		Repository: repo,
+		TxProvider: txp,
+		Projektove: &fakeProjektove{getProjectsRes: []ProjektoveProject{{ID: 1, Name: "p1", Description: "d1"}}},
+		Users:      ProjektoveUsers{{ID: 1, Name: "u1"}},
+	}
 
 	promptUUID, err := c.CreatePrompt(t.Context(), user, "googleai", "gemini", contextID, "meeting notes")
 	require.NoError(t, err)
@@ -352,12 +357,37 @@ func TestControllerCreatePrompt_ModelNotFound(t *testing.T) {
 	user := storeUser(t, repo, "user@email.com")
 	contextID, _ := storeContext(t, repo, user, "c1")
 
-	c := Controller{Repository: repo, TxProvider: txp}
+	c := Controller{
+		Repository: repo,
+		TxProvider: txp,
+		Projektove: &fakeProjektove{getProjectsRes: []ProjektoveProject{{ID: 1, Name: "p1", Description: "d1"}}},
+	}
 
 	_, err := c.CreatePrompt(t.Context(), user, "nope", "model", contextID, "meeting notes")
 	assert.True(t, errors.Is(err, ErrModelNotFound))
 
 	// nothing was stored since the transaction was aborted before the task
+	_, ok, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestControllerCreatePrompt_MissingToken(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID, _ := storeContext(t, repo, user, "c1")
+
+	c := Controller{Repository: repo, TxProvider: txp, Projektove: &fakeProjektove{getProjectsErr: ErrProjektoveTokenNotConfigured}}
+
+	_, err := c.CreatePrompt(t.Context(), user, "googleai", "gemini", contextID, "meeting notes")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrProjektoveTokenNotConfigured))
+
+	// no prompt and no task were stored
+	prompts, _, err := repo.ListPrompts(t.Context(), user, 20, 0)
+	require.NoError(t, err)
+	assert.Empty(t, prompts)
+
 	_, ok, err := repo.ClaimTask(t.Context())
 	require.NoError(t, err)
 	assert.False(t, ok)
@@ -561,6 +591,22 @@ func TestControllerCreateBatch_ProjectsError(t *testing.T) {
 	_, err := c.CreateBatch(t.Context(), user, validCSV())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "when listing projects")
+}
+
+func TestControllerCreateBatch_MissingToken(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	c := Controller{Repository: repo, TxProvider: txp, Projektove: &fakeProjektove{getProjectsErr: ErrProjektoveTokenNotConfigured}}
+
+	_, err := c.CreateBatch(t.Context(), user, validCSV())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrProjektoveTokenNotConfigured))
+
+	batches, hasMore, err := repo.ListBatches(t.Context(), user, 20, 0)
+	require.NoError(t, err)
+	assert.Empty(t, batches)
+	assert.False(t, hasMore)
 }
 
 func TestControllerListBatches(t *testing.T) {

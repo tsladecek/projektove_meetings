@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,10 @@ type ResponseCreateIssue struct {
 }
 
 func (p ProjektoveAPI) CreateIssue(ctx context.Context, user User, obj ProjektoveIssueCreate) (ProjektoveIssue, error) {
+	if strings.TrimSpace(user.ProjektoveToken) == "" {
+		return ProjektoveIssue{}, ErrProjektoveTokenNotConfigured
+	}
+
 	u := p.baseURL.JoinPath("issues.json").String()
 
 	body := projektoveCreateBody{
@@ -74,6 +79,10 @@ type ResponseProjects struct {
 }
 
 func (p ProjektoveAPI) GetProjects(ctx context.Context, user User) ([]ProjektoveProject, error) {
+	if strings.TrimSpace(user.ProjektoveToken) == "" {
+		return nil, ErrProjektoveTokenNotConfigured
+	}
+
 	fromCache, err := p.db.ListProjects(ctx, user)
 	if err != nil {
 		if !errors.Is(err, ErrNoProjectsFound) {

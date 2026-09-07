@@ -1,7 +1,6 @@
 package projektovemeeting
 
 import (
-	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -20,13 +19,7 @@ func newUUID() string {
 
 func WriteError(w http.ResponseWriter, message string, status int, err error) {
 	if err != nil {
-		for {
-			slog.Error(err.Error())
-			err := errors.Unwrap(err)
-			if err == nil {
-				break
-			}
-		}
+		slog.Error(err.Error())
 	}
 	http.Error(w, message, status)
 }

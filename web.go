@@ -204,7 +204,7 @@ func (a api) newPrompt() http.HandlerFunc {
 			return
 		}
 
-		a.components.Page(a.components.NewPromptPage(contexts, user.LLMModels)).Render(w)
+		a.components.Page(a.components.NewPromptPage(contexts, user.LLMModels, nil)).Render(w)
 	}
 }
 
@@ -478,6 +478,17 @@ func (a api) createPrompt() http.HandlerFunc {
 
 		promptUUID, err := a.controller.CreatePrompt(r.Context(), user, provider, name, context.ID, string(meeting))
 		if err != nil {
+			if errors.Is(err, ErrProjektoveTokenNotConfigured) {
+				contexts, ctxErr := a.controller.ListContexts(r.Context(), user)
+				if ctxErr != nil {
+					WriteError(w, "failed to load contexts", http.StatusInternalServerError, ctxErr)
+					return
+				}
+				a.components.Page(a.components.NewPromptPage(contexts, user.LLMModels, []string{
+					"Your Projektove token is not configured. Set it on the User page before creating a prompt.",
+				})).Render(w)
+				return
+			}
 			if errors.Is(err, ErrModelNotFound) {
 				WriteError(w, "llm model not found", http.StatusNotFound, err)
 				return
@@ -519,6 +530,13 @@ func (a api) createBatch() http.HandlerFunc {
 
 		batchUUID, err := a.controller.CreateBatch(r.Context(), user, string(raw))
 		if err != nil {
+			if errors.Is(err, ErrProjektoveTokenNotConfigured) {
+				a.components.Page(a.components.NewBatchPage([]string{
+					"Your Projektove token is not configured. Set it on the User page before uploading a batch.",
+				})).Render(w)
+				return
+			}
+
 			var csvErr *BatchCSVError
 			if errors.As(err, &csvErr) {
 				a.components.Page(a.components.NewBatchPage(csvErr.Messages)).Render(w)
@@ -989,7 +1007,23 @@ func (c components) contextRows(contexts []ContextView) []g.Node {
 	return rows
 }
 
-func (c components) NewPromptPage(contexts []ContextView, models []LLMModel) g.Node {
+func (c components) NewPromptPage(contexts []ContextView, models []LLMModel, validationErrors []string) g.Node {
+	nodes := []g.Node{}
+
+	if len(validationErrors) > 0 {
+		items := []g.Node{}
+		for _, m := range validationErrors {
+			items = append(items, h.Li(g.Text(m)))
+		}
+		nodes = append(nodes,
+			h.Div(
+				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3 max-w-2xl"),
+				h.H2(h.Class("font-semibold mb-1"), g.Text("Prompt could not be created")),
+				h.Ul(g.Group(items)),
+			),
+		)
+	}
+
 	modelOpts := []g.Node{}
 	for _, m := range models {
 		value := string(m.Provider) + "|" + m.Model
@@ -1002,7 +1036,7 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel) g.N
 		contextOpts = append(contextOpts, h.Option(h.Value(cx.ID), g.Text(cx.Name)))
 	}
 
-	return h.Div(
+	nodes = append(nodes,
 		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("New prompt")),
 
 		h.Form(
@@ -1048,6 +1082,8 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel) g.N
 			c.CreateButton(h.Type("submit")),
 		),
 	)
+
+	return h.Div(g.Group(nodes))
 }
 
 func (c components) NewBatchPage(validationErrors []string) g.Node {

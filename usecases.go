@@ -231,6 +231,10 @@ func (c Controller) DeleteContext(ctx context.Context, user User, uuid string) e
 }
 
 func (c Controller) CreatePrompt(ctx context.Context, user User, modelProvider, modelName string, contextID int, meeting string) (string, error) {
+	if _, err := c.Projektove.GetProjects(ctx, user); err != nil {
+		return "", fmt.Errorf("when listing projects: %w", err)
+	}
+
 	if _, found := user.GetModel(LLMProvider(modelProvider), modelName); !found {
 		return "", ErrModelNotFound
 	}
