@@ -193,3 +193,12 @@ type LLMContext struct {
 	Context string
 	Name    string
 }
+
+type Batch struct {
+	ID              int
+	UUID            string
+	FileContent     string
+	CreatedAt       time.Time
+	TotalIssues     int
+	SubmittedIssues int
+}

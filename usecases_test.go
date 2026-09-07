@@ -494,3 +494,161 @@ func TestRunInference_ProjectsError(t *testing.T) {
 	assert.Equal(t, PromptStatusError, prompt.Status)
 	assert.Contains(t, prompt.Error, "when listing projects")
 }
+
+func TestControllerCreateBatch(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	c := Controller{
+		Repository: repo,
+		TxProvider: txp,
+		Projektove: &fakeProjektove{getProjectsRes: []ProjektoveProject{
+			{ID: 1, Name: "p1", Description: "d1"},
+			{ID: 2, Name: "p2", Description: "d2"},
+		}},
+		Users: ProjektoveUsers{{ID: 1, Name: "u1"}},
+	}
+
+	batchUUID, err := c.CreateBatch(t.Context(), user, validCSV())
+	require.NoError(t, err)
+	require.NotEmpty(t, batchUUID)
+
+	batch, err := repo.GetBatchByUUID(t.Context(), user, batchUUID)
+	require.NoError(t, err)
+	assert.Equal(t, validCSV(), batch.FileContent)
+
+	issues, err := repo.ListIssues(t.Context(), user, IssueParentBatch, batch.ID)
+	require.NoError(t, err)
+	require.Len(t, issues, 2)
+	assert.Equal(t, "task one", issues[0].Subject)
+	assert.Equal(t, IssueParentBatch, issues[0].Parent)
+	assert.Equal(t, batch.ID, issues[0].ParentID)
+	assert.Equal(t, 1, issues[0].ProjectID)
+	assert.Equal(t, 1, issues[0].AssignedToID)
+	assert.Zero(t, issues[1].AssignedToID)
+}
+
+func TestControllerCreateBatch_InvalidCSV(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	c := Controller{
+		Repository: repo,
+		TxProvider: txp,
+		Projektove: &fakeProjektove{getProjectsRes: []ProjektoveProject{{ID: 1, Name: "p1", Description: "d1"}}},
+		Users:      ProjektoveUsers{{ID: 1, Name: "u1"}},
+	}
+
+	raw := "Subject, Project, Start date, Due date\n" +
+		"x, nope, 2026-01-01, 2026-02-01\n"
+
+	_, err := c.CreateBatch(t.Context(), user, raw)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrBatchCSVInvalid))
+
+	batches, hasMore, err := repo.ListBatches(t.Context(), user, 20, 0)
+	require.NoError(t, err)
+	assert.Empty(t, batches)
+	assert.False(t, hasMore)
+}
+
+func TestControllerCreateBatch_ProjectsError(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	c := Controller{Repository: repo, TxProvider: txp, Projektove: &fakeProjektove{getProjectsErr: errors.New("net down")}}
+
+	_, err := c.CreateBatch(t.Context(), user, validCSV())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "when listing projects")
+}
+
+func TestControllerListBatches(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	batchID, batchUUID := storeBatch(t, repo, user, "raw")
+
+	submitted := newIssueCreate(IssueParentBatch, batchID)
+	submittedID, err := repo.StoreIssue(t.Context(), user, submitted)
+	require.NoError(t, err)
+	require.NotZero(t, submittedID)
+
+	projektoveID := 42
+	require.NoError(t, repo.UpdateIssue(t.Context(), user, IssueParentBatch, batchID, submittedID, IssueUpdate{
+		Subject:      submitted.Subject,
+		Description:  submitted.Description,
+		ProjectID:    submitted.ProjectID,
+		StartDate:    submitted.StartDate,
+		DueDate:      submitted.DueDate,
+		AssignedToID: submitted.AssignedToID,
+		Status:       IssueStatusSubmitted,
+		ProjektoveID: &projektoveID,
+	}))
+	_, err = repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentBatch, batchID))
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+
+	view, err := c.ListBatches(t.Context(), user, 20, 0)
+	require.NoError(t, err)
+	require.Len(t, view.Items, 1)
+	assert.False(t, view.HasMore)
+	assert.Equal(t, batchUUID, view.Items[0].ID)
+	assert.Equal(t, 2, view.Items[0].TotalIssues)
+	assert.Equal(t, 1, view.Items[0].SubmittedIssues)
+
+	page, err := c.ListBatches(t.Context(), user, 1, 0)
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, 1, page.NextOffset)
+	assert.False(t, page.HasMore)
+}
+
+func TestControllerGetBatch(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	batchID, batchUUID := storeBatch(t, repo, user, validCSV())
+
+	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentBatch, batchID))
+	require.NoError(t, err)
+	require.NotZero(t, issueID)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentBatch, batchID, issueID)
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+
+	view, err := c.GetBatch(t.Context(), user, batchUUID)
+	require.NoError(t, err)
+	assert.Equal(t, batchUUID, view.ID)
+	assert.Equal(t, validCSV(), view.FileContent)
+	require.Len(t, view.Issues, 1)
+	assert.Equal(t, iss.UUID, view.Issues[0].ID)
+	assert.True(t, view.Issues[0].Editable)
+}
+
+func TestControllerGetBatch_NotFound(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	c := Controller{Repository: repo}
+	_, err := c.GetBatch(t.Context(), user, "missing")
+	assert.True(t, errors.Is(err, ErrBatchNotFound))
+}
+
+func TestControllerGetIssueViewByUUID(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	batchID, _ := storeBatch(t, repo, user, "raw")
+
+	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentBatch, batchID))
+	require.NoError(t, err)
+	iss, err := repo.GetIssue(t.Context(), user, IssueParentBatch, batchID, issueID)
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+	view, err := c.GetIssueViewByUUID(t.Context(), user, iss.UUID)
+	require.NoError(t, err)
+	assert.Equal(t, iss.UUID, view.ID)
+	assert.Equal(t, "subject", view.Subject)
+	assert.Equal(t, IssueStatusCreated, view.Status)
+}

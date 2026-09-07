@@ -56,6 +56,9 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 		prompts:   end(http.MethodGet, "/prompts/"),
 		newPrompt: end(http.MethodGet, "/prompts/new"),
 		prompt:    end(http.MethodGet, "/prompts/{id}"),
+		batches:   end(http.MethodGet, "/batches/"),
+		newBatch:  end(http.MethodGet, "/batches/new"),
+		batch:     end(http.MethodGet, "/batches/{id}"),
 
 		// api
 
@@ -66,6 +69,7 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 
 		listContexts: endAPI(http.MethodGet, "/contexts"),
 		createPrompt: endAPI(http.MethodPost, "/prompts"),
+		createBatch:  endAPI(http.MethodPost, "/batches"),
 
 		updateIssue: endAPI(http.MethodPut, "/issues/{id}"),
 		submitIssue: endAPI(http.MethodPost, "/issues/{id}/submit"),
@@ -88,6 +92,9 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 		{endpoint: e.prompts, handler: a.prompts()},
 		{endpoint: e.newPrompt, handler: a.newPrompt()},
 		{endpoint: e.prompt, handler: a.prompt()},
+		{endpoint: e.batches, handler: a.batches()},
+		{endpoint: e.newBatch, handler: a.newBatch()},
+		{endpoint: e.batch, handler: a.batch()},
 
 		// api
 		{endpoint: e.updateUser, handler: a.updateUser()},
@@ -96,6 +103,7 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 		{endpoint: e.addLLMModel, handler: a.addLLMModel()},
 		{endpoint: e.listContexts, handler: a.listContexts()},
 		{endpoint: e.createPrompt, handler: a.createPrompt()},
+		{endpoint: e.createBatch, handler: a.createBatch()},
 		{endpoint: e.updateIssue, handler: a.updateIssue()},
 		{endpoint: e.submitIssue, handler: a.submitIssue()},
 	} {
@@ -226,6 +234,78 @@ func (a api) prompt() http.HandlerFunc {
 		}
 
 		fragment := a.components.PromptFragment(view, projects, a.controller.Users)
+		if r.Header.Get("HX-Request") != "" {
+			fragment.Render(w)
+			return
+		}
+		a.components.Page(fragment).Render(w)
+	}
+}
+
+func (a api) batches() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		offset := 0
+		if raw := r.URL.Query().Get("offset"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil {
+				WriteError(w, "invalid offset", http.StatusBadRequest, nil)
+				return
+			}
+			offset = parsed
+		}
+
+		view, err := a.controller.ListBatches(r.Context(), user, promptsPageSize, offset)
+		if err != nil {
+			WriteError(w, "failed to load batches", http.StatusInternalServerError, err)
+			return
+		}
+
+		if r.Header.Get("HX-Request") != "" {
+			a.components.BatchesList(view).Render(w)
+			return
+		}
+		a.components.Page(a.components.BatchesPage(view)).Render(w)
+	}
+}
+
+func (a api) newBatch() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		a.components.Page(a.components.NewBatchPage(nil)).Render(w)
+	}
+}
+
+func (a api) batch() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		id := r.PathValue("id")
+
+		view, err := a.controller.GetBatch(r.Context(), user, id)
+		if err != nil {
+			if errors.Is(err, ErrBatchNotFound) {
+				WriteError(w, "batch not found", http.StatusNotFound, nil)
+				return
+			}
+			WriteError(w, "failed to load batch", http.StatusInternalServerError, err)
+			return
+		}
+
+		projects, err := a.controller.ListProjects(r.Context(), user)
+		if err != nil {
+			projects = []ProjectOptionView{}
+		}
+
+		fragment := a.components.BatchFragment(view, projects, a.controller.Users)
 		if r.Header.Get("HX-Request") != "" {
 			fragment.Render(w)
 			return
@@ -411,6 +491,48 @@ func (a api) createPrompt() http.HandlerFunc {
 	}
 }
 
+func (a api) createBatch() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			WriteError(w, "invalid request", http.StatusBadRequest, err)
+			return
+		}
+
+		file, _, err := r.FormFile("csv")
+		if err != nil {
+			WriteError(w, "invalid csv file", http.StatusBadRequest, err)
+			return
+		}
+		defer file.Close()
+
+		raw, err := io.ReadAll(file)
+		if err != nil {
+			WriteError(w, "failed to read csv file", http.StatusBadRequest, err)
+			return
+		}
+
+		batchUUID, err := a.controller.CreateBatch(r.Context(), user, string(raw))
+		if err != nil {
+			var csvErr *BatchCSVError
+			if errors.As(err, &csvErr) {
+				a.components.Page(a.components.NewBatchPage(csvErr.Messages)).Render(w)
+				return
+			}
+			WriteError(w, "failed to create batch", http.StatusInternalServerError, err)
+			return
+		}
+
+		redirectPath := strings.Replace(a.components.endpoints.batch.Path(), "{id}", batchUUID, 1)
+		http.Redirect(w, r, redirectPath, http.StatusSeeOther)
+	}
+}
+
 func parseDate(s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil
@@ -435,25 +557,14 @@ func parseIssueFields(r *http.Request) IssueUpdateView {
 }
 
 func (a api) renderIssueCard(ctx context.Context, w http.ResponseWriter, user User, issueUUID string, projects []ProjectOptionView, errMsg string) {
-	view, err := a.controller.GetPromptViewForIssue(ctx, user, issueUUID)
+	iss, err := a.controller.GetIssueViewByUUID(ctx, user, issueUUID)
 	if err != nil {
-		if errors.Is(err, ErrIssueNotFound) || errors.Is(err, ErrParentDoesNotBelongToUser) {
-			WriteError(w, "issue not found", http.StatusNotFound, nil)
-			return
-		}
-		WriteError(w, "failed to load prompt", http.StatusInternalServerError, err)
+		WriteError(w, "issue not found", http.StatusNotFound, nil)
 		return
 	}
 
-	for _, iss := range view.Issues {
-		if iss.ID == issueUUID {
-			iss.Error = errMsg
-			a.components.IssueCard(iss, projects, a.controller.Users).Render(w)
-			return
-		}
-	}
-
-	WriteError(w, "issue not found", http.StatusNotFound, nil)
+	iss.Error = errMsg
+	a.components.IssueCard(iss, projects, a.controller.Users).Render(w)
 }
 
 func (a api) updateIssue() http.HandlerFunc {
@@ -562,6 +673,9 @@ type endpoints struct {
 	prompts   Endpoint
 	newPrompt Endpoint
 	prompt    Endpoint
+	batches   Endpoint
+	newBatch  Endpoint
+	batch     Endpoint
 
 	// api - should have /api prefix
 	updateUser    Endpoint
@@ -571,6 +685,7 @@ type endpoints struct {
 
 	listContexts Endpoint
 	createPrompt Endpoint
+	createBatch  Endpoint
 
 	updateIssue Endpoint
 	submitIssue Endpoint
@@ -619,8 +734,12 @@ type navLink struct {
 func (c components) Sidebar() g.Node {
 	links := []navLink{
 		{label: "User", href: c.endpoints.user.Path()},
+
 		{label: "New prompt", href: c.endpoints.newPrompt.Path()},
 		{label: "Prompts", href: c.endpoints.prompts.Path()},
+
+		{label: "New batch", href: c.endpoints.newBatch.Path()},
+		{label: "Batches", href: c.endpoints.batches.Path()},
 	}
 
 	navItems := []g.Node{}
@@ -659,7 +778,7 @@ func (c components) PromptsBatch(view PromptListView) g.Node {
 	}
 
 	if view.HasMore {
-		rows = append(rows, c.loadMoreButton(view.NextOffset))
+		rows = append(rows, c.loadMoreButton(c.endpoints.prompts.Path()+"?offset="+strconv.Itoa(view.NextOffset)))
 	}
 
 	return h.Div(g.Group(rows))
@@ -701,8 +820,60 @@ func (c components) promptRow(it PromptListItem) g.Node {
 		))
 }
 
-func (c components) loadMoreButton(offset int) g.Node {
-	path := c.endpoints.prompts.Path() + "?offset=" + strconv.Itoa(offset)
+func (c components) BatchesPage(view BatchListView) g.Node {
+	return h.Div(
+		h.H1(h.Class("text-2xl font-bold mb-4"), g.Text("Batches")),
+		c.BatchesList(view),
+	)
+}
+
+func (c components) BatchesList(view BatchListView) g.Node {
+	if len(view.Items) == 0 {
+		return h.P(h.Class("text-gray-500"), g.Text("No batches yet."))
+	}
+
+	rows := []g.Node{}
+	for _, it := range view.Items {
+		rows = append(rows, c.batchRow(it))
+	}
+
+	if view.HasMore {
+		rows = append(rows, c.loadMoreButton(c.endpoints.batches.Path()+"?offset="+strconv.Itoa(view.NextOffset)))
+	}
+
+	return h.Div(g.Group(rows))
+}
+
+func (c components) batchRow(it BatchListItem) g.Node {
+	path := strings.Replace(c.endpoints.batch.Path(), "{id}", it.ID, 1)
+
+	issues := g.Node(h.Span(h.Class("text-sm text-gray-500"), g.Text("")))
+	if it.TotalIssues > 0 {
+		if it.SubmittedIssues == it.TotalIssues {
+			issues = h.Span(
+				h.Class("flex items-center gap-1 text-sm text-green-700"),
+				solid.CheckCircle(h.Class("h-5 w-5 text-green-600")),
+				g.Text("All submitted"),
+			)
+		} else {
+			issues = h.Span(h.Class("text-sm text-gray-500 text-center"), g.Text(fmt.Sprintf("%d / %d submitted", it.SubmittedIssues, it.TotalIssues)))
+		}
+	}
+
+	return h.A(
+		h.Href(path),
+		h.Div(
+			h.Class("border hover:bg-gray-100 grid grid-rows-3 justify-center lg:grid-rows-1 lg:grid-cols-3 rounded px-3 py-2 items-center"),
+			h.Div(
+				h.Class("block min-w-0"),
+				h.Div(h.Class("font-small"), g.Text(it.ID)),
+			),
+			h.Div(h.Class("text-sm text-gray-500 whitespace-nowrap text-center"), g.Text(it.CreatedAt.Format("2006-01-02 15:04"))),
+			issues,
+		))
+}
+
+func (c components) loadMoreButton(path string) g.Node {
 	return c.button(
 		baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 disabled:bg-gray-400 disabled:hover:bg-gray-400",
 		htmx.Get(path),
@@ -879,6 +1050,52 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel) g.N
 	)
 }
 
+func (c components) NewBatchPage(validationErrors []string) g.Node {
+	nodes := []g.Node{}
+
+	if len(validationErrors) > 0 {
+		items := []g.Node{}
+		for _, m := range validationErrors {
+			items = append(items, h.Li(g.Text(m)))
+		}
+		nodes = append(nodes,
+			h.Div(
+				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3 max-w-2xl"),
+				h.H2(h.Class("font-semibold mb-1"), g.Text("The table could not be uploaded")),
+				h.Ul(g.Group(items)),
+			),
+		)
+	}
+
+	nodes = append(nodes,
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("New batch")),
+		h.Form(
+			h.Method("post"),
+			h.Action(c.endpoints.createBatch.Path()),
+			h.EncType("multipart/form-data"),
+			h.Class("space-y-6 max-w-2xl"),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("CSV table")),
+				h.Input(
+					h.Type("file"),
+					h.Name("csv"),
+					h.Accept(".csv,text/csv"),
+					h.Required(),
+					h.Class("w-full px-3 py-2 border rounded"),
+				),
+				h.P(
+					h.Class("text-sm text-gray-500"),
+					g.Text(`The table must contain columns "Subject", "Project", "Start date" and "Due date". Optional columns: "Description", "Assignee".`),
+				),
+			),
+			c.CreateButton(h.Type("submit")),
+		),
+	)
+
+	return h.Div(g.Group(nodes))
+}
+
 func dateValue(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -973,6 +1190,51 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 	nodes = append(nodes, h.Div(h.Class("space-y-4"), g.Group(issueCards)))
 
 	return h.Div(h.ID("prompt-view"), h.Class("flex flex-col gap-4"), g.Group(nodes))
+}
+
+func (c components) BatchFragment(view BatchView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+	issueCards := []g.Node{}
+	for _, iss := range view.Issues {
+		issueCards = append(issueCards, c.IssueCard(iss, projects, users))
+	}
+
+	nodes := []g.Node{
+		h.Div(
+			h.Class("space-y-6 max-w-3xl"),
+			h.H1(h.Class("text-2xl font-bold mb-2"), g.Text("Batch "+view.ID)),
+		),
+		h.Div(
+			h.Class("space-y-1"),
+			h.H2(h.Class("text-lg font-semibold"), g.Text("Raw file content")),
+			h.Pre(h.Class("whitespace-pre-wrap bg-gray-100 border rounded p-3 text-sm overflow-auto max-h-64"), g.Text(view.FileContent)),
+		),
+	}
+
+	hasPending := false
+	for _, iss := range view.Issues {
+		if iss.Editable {
+			hasPending = true
+			break
+		}
+	}
+
+	if hasPending {
+		nodes = append(nodes,
+			h.Div(
+				h.ID("submit-all-row"),
+				h.Class("flex items-center gap-3"),
+				c.SubmitButton(
+					h.Type("button"),
+					g.Attr("onclick", "submitAll()"),
+				),
+				h.Span(h.Class("text-sm text-gray-500"), g.Text("Submit all pending issues")),
+			),
+		)
+	}
+
+	nodes = append(nodes, h.Div(h.Class("space-y-4"), g.Group(issueCards)))
+
+	return h.Div(h.ID("batch-view"), h.Class("flex flex-col gap-4"), g.Group(nodes))
 }
 
 func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {

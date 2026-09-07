@@ -328,19 +328,15 @@ func (c Controller) GetPrompt(ctx context.Context, user User, uuid string) (Prom
 	return c.buildPromptView(ctx, user, prompt)
 }
 
-// GetPromptViewForIssue resolves an issue by its uuid and returns the view of its
-// parent prompt, so the frontend can re-render an issue card in context.
-func (c Controller) GetPromptViewForIssue(ctx context.Context, user User, issueUUID string) (PromptView, error) {
+// GetIssueViewByUUID resolves an issue by its uuid and returns a single issue
+// view, regardless of its parent (prompt or batch). Used to re-render an
+// issue card after update/submit.
+func (c Controller) GetIssueViewByUUID(ctx context.Context, user User, issueUUID string) (IssueView, error) {
 	iss, err := c.Repository.GetIssueByUUID(ctx, user, issueUUID)
 	if err != nil {
-		return PromptView{}, err
+		return IssueView{}, err
 	}
-
-	prompt, err := c.Repository.GetPrompt(ctx, user, iss.ParentID)
-	if err != nil {
-		return PromptView{}, err
-	}
-	return c.buildPromptView(ctx, user, prompt)
+	return toIssueView(iss), nil
 }
 
 func (c Controller) buildPromptView(ctx context.Context, user User, prompt Prompt) (PromptView, error) {
@@ -356,25 +352,119 @@ func (c Controller) buildPromptView(ctx context.Context, user User, prompt Promp
 		Error:       prompt.Error,
 		ContextName: prompt.Context.Name,
 		Status:      prompt.Status,
-		Issues:      make([]IssueView, 0, len(issues)),
-	}
-
-	for _, iss := range issues {
-		view.Issues = append(view.Issues, IssueView{
-			ID:           iss.UUID,
-			Subject:      iss.Subject,
-			Description:  iss.Description,
-			ProjectID:    iss.ProjectID,
-			StartDate:    iss.StartDate,
-			DueDate:      iss.DueDate,
-			AssignedToID: iss.AssignedToID,
-			ProjektoveID: iss.ProjektoveID,
-			Status:       iss.Status,
-			Editable:     !isSubmitted(iss.Status),
-		})
+		Issues:      toIssueViews(issues),
 	}
 
 	return view, nil
+}
+
+func toIssueViews(issues []Issue) []IssueView {
+	views := make([]IssueView, 0, len(issues))
+	for _, iss := range issues {
+		views = append(views, toIssueView(iss))
+	}
+	return views
+}
+
+func toIssueView(iss Issue) IssueView {
+	return IssueView{
+		ID:           iss.UUID,
+		Subject:      iss.Subject,
+		Description:  iss.Description,
+		ProjectID:    iss.ProjectID,
+		StartDate:    iss.StartDate,
+		DueDate:      iss.DueDate,
+		AssignedToID: iss.AssignedToID,
+		ProjektoveID: iss.ProjektoveID,
+		Status:       iss.Status,
+		Editable:     !isSubmitted(iss.Status),
+	}
+}
+
+func (c Controller) CreateBatch(ctx context.Context, user User, rawCSV string) (string, error) {
+	projects, err := c.Projektove.GetProjects(ctx, user)
+	if err != nil {
+		return "", fmt.Errorf("when listing projects: %w", err)
+	}
+
+	objs, err := parseBatchCSV(rawCSV, projects, c.Users)
+	if err != nil {
+		return "", err
+	}
+
+	batchUUID := ""
+	if err := c.TxProvider.Transact(func(repo Repository) error {
+		id, uuid, err := repo.StoreBatch(ctx, user, rawCSV)
+		if err != nil {
+			return fmt.Errorf("when storing batch: %w", err)
+		}
+		batchUUID = uuid
+
+		for _, iss := range objs {
+			iss.Parent = IssueParentBatch
+			iss.ParentID = id
+			if _, err := repo.StoreIssue(ctx, user, iss); err != nil {
+				return fmt.Errorf("when storing issue: %w", err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return "", fmt.Errorf("when creating batch: %w", err)
+	}
+
+	return batchUUID, nil
+}
+
+func (c Controller) ListBatches(ctx context.Context, user User, limit, offset int) (BatchListView, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	batches, hasMore, err := c.Repository.ListBatches(ctx, user, limit, offset)
+	if err != nil {
+		return BatchListView{}, fmt.Errorf("when listing batches: %w", err)
+	}
+
+	items := make([]BatchListItem, 0, len(batches))
+	for _, b := range batches {
+		items = append(items, BatchListItem{
+			ID:              b.UUID,
+			CreatedAt:       b.CreatedAt,
+			TotalIssues:     b.TotalIssues,
+			SubmittedIssues: b.SubmittedIssues,
+		})
+	}
+
+	return BatchListView{
+		Items:      items,
+		HasMore:    hasMore,
+		NextOffset: offset + len(items),
+	}, nil
+}
+
+func (c Controller) GetBatch(ctx context.Context, user User, uuid string) (BatchView, error) {
+	batch, err := c.Repository.GetBatchByUUID(ctx, user, uuid)
+	if err != nil {
+		return BatchView{}, err
+	}
+	return c.buildBatchView(ctx, user, batch)
+}
+
+func (c Controller) buildBatchView(ctx context.Context, user User, batch Batch) (BatchView, error) {
+	issues, err := c.Repository.ListIssues(ctx, user, IssueParentBatch, batch.ID)
+	if err != nil {
+		return BatchView{}, fmt.Errorf("when listing issues: %w", err)
+	}
+
+	return BatchView{
+		ID:          batch.UUID,
+		FileContent: batch.FileContent,
+		CreatedAt:   batch.CreatedAt,
+		Issues:      toIssueViews(issues),
+	}, nil
 }
 
 func (c Controller) UpdateIssue(ctx context.Context, user User, issueUUID string, v IssueUpdateView) error {

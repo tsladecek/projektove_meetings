@@ -244,6 +244,96 @@ func (r *RepositorySqlite) CompletePrompt(ctx context.Context, user User, id int
 	return nil
 }
 
+func (r *RepositorySqlite) StoreBatch(ctx context.Context, user User, fileContent string) (int, string, error) {
+	uuid := newUUID()
+
+	result, execErr := r.DB.ExecContext(ctx, "INSERT INTO issue_batches (uuid, file_content, user_id) VALUES (?, ?, ?)", uuid, fileContent, user.ID)
+	if execErr != nil {
+		return 0, "", fmt.Errorf("failed to store batch: %w", execErr)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to get last insert id: %w", err)
+	}
+
+	return int(id), uuid, nil
+}
+
+const batchSelect = `
+SELECT b.id, b.uuid, b.file_content, b.created_at
+FROM issue_batches b`
+
+func (r *RepositorySqlite) ListBatches(ctx context.Context, user User, limit, offset int) ([]Batch, bool, error) {
+	batches := []Batch{}
+
+	rows, err := r.DB.QueryContext(ctx, `
+	SELECT
+	b.id, b.uuid, b.file_content, b.created_at,
+	(SELECT COUNT(*) FROM issues i WHERE i.parent = 'batch' AND i.parent_id = b.id) AS total_issues,
+	(SELECT COUNT(*) FROM issues i WHERE i.parent = 'batch' AND i.parent_id = b.id AND i.status = 'submitted') AS submitted_issues
+	FROM issue_batches b
+	WHERE b.user_id = ?
+	ORDER BY b.id DESC
+	LIMIT ? OFFSET ?
+	`, user.ID, limit+1, offset)
+	if err != nil {
+		return nil, false, fmt.Errorf("when listing batches: %w", err)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		b := Batch{}
+		if err := rows.Scan(&b.ID, &b.UUID, &b.FileContent, &b.CreatedAt, &b.TotalIssues, &b.SubmittedIssues); err != nil {
+			return nil, false, fmt.Errorf("when scanning results: %w", err)
+		}
+		batches = append(batches, b)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("when iterating over results: %w", err)
+	}
+
+	hasMore := false
+	if len(batches) > limit {
+		hasMore = true
+		batches = batches[:limit]
+	}
+
+	return batches, hasMore, nil
+}
+
+func (r *RepositorySqlite) GetBatch(ctx context.Context, user User, id int) (Batch, error) {
+	b := Batch{}
+	err := r.DB.QueryRowContext(ctx, batchSelect+`
+	WHERE b.id = ? AND b.user_id = ?
+	`, id, user.ID).Scan(&b.ID, &b.UUID, &b.FileContent, &b.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Batch{}, ErrBatchNotFound
+		}
+		return Batch{}, fmt.Errorf("when getting batch: %w", err)
+	}
+
+	return b, nil
+}
+
+func (r *RepositorySqlite) GetBatchByUUID(ctx context.Context, user User, uuid string) (Batch, error) {
+	b := Batch{}
+	err := r.DB.QueryRowContext(ctx, batchSelect+`
+	WHERE b.uuid = ? AND b.user_id = ?
+	`, uuid, user.ID).Scan(&b.ID, &b.UUID, &b.FileContent, &b.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Batch{}, ErrBatchNotFound
+		}
+		return Batch{}, fmt.Errorf("when getting batch: %w", err)
+	}
+
+	return b, nil
+}
+
 func (r *RepositorySqlite) EnqueueTask(ctx context.Context, obj TaskCreate) (int, error) {
 	payload, err := json.Marshal(obj.Payload)
 	if err != nil {

@@ -339,6 +339,180 @@ func TestListPrompts_Empty(t *testing.T) {
 	assert.False(t, hasMore)
 }
 
+func storeBatch(t *testing.T, repo Repository, user User, rawCSV string) (int, string) {
+	t.Helper()
+	id, uuid, err := repo.StoreBatch(t.Context(), user, rawCSV)
+	require.NoError(t, err)
+	return id, uuid
+}
+
+func TestStoreBatch_GetBatch(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	id, uuid, err := repo.StoreBatch(t.Context(), user, "subject,project")
+	require.NoError(t, err)
+	require.NotZero(t, id)
+	require.NotEmpty(t, uuid)
+
+	byID, err := repo.GetBatch(t.Context(), user, id)
+	require.NoError(t, err)
+	assert.Equal(t, id, byID.ID)
+	assert.Equal(t, uuid, byID.UUID)
+	assert.Equal(t, "subject,project", byID.FileContent)
+	assert.False(t, byID.CreatedAt.IsZero())
+
+	byUUID, err := repo.GetBatchByUUID(t.Context(), user, uuid)
+	require.NoError(t, err)
+	assert.Equal(t, id, byUUID.ID)
+}
+
+func TestGetBatch_NotFound(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	_, err := repo.GetBatch(t.Context(), user, 999)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrBatchNotFound))
+
+	_, err = repo.GetBatchByUUID(t.Context(), user, "missing")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrBatchNotFound))
+}
+
+func TestGetBatch_NotOwned(t *testing.T) {
+	repo := newRepository(t)
+	owner := storeUser(t, repo, "owner@email.com")
+	other := storeUser(t, repo, "other@email.com")
+	id, uuid := storeBatch(t, repo, owner, "raw")
+
+	_, err := repo.GetBatch(t.Context(), other, id)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrBatchNotFound))
+
+	_, err = repo.GetBatchByUUID(t.Context(), other, uuid)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrBatchNotFound))
+}
+
+func TestListBatches(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	_, uuid1 := storeBatch(t, repo, user, "raw1")
+	_, uuid2 := storeBatch(t, repo, user, "raw2")
+
+	batches, hasMore, err := repo.ListBatches(t.Context(), user, 20, 0)
+	require.NoError(t, err)
+	require.Len(t, batches, 2)
+	assert.False(t, hasMore)
+
+	assert.Equal(t, uuid2, batches[0].UUID)
+	assert.Equal(t, uuid1, batches[1].UUID)
+	assert.Equal(t, "raw2", batches[0].FileContent)
+	assert.False(t, batches[0].CreatedAt.IsZero())
+}
+
+func TestListBatches_Pagination(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	uuids := []string{}
+	for i := 0; i < 3; i++ {
+		_, uuid := storeBatch(t, repo, user, "raw")
+		uuids = append(uuids, uuid)
+	}
+
+	page1, hasMore, err := repo.ListBatches(t.Context(), user, 2, 0)
+	require.NoError(t, err)
+	require.Len(t, page1, 2)
+	assert.True(t, hasMore)
+	assert.Equal(t, uuids[2], page1[0].UUID)
+	assert.Equal(t, uuids[1], page1[1].UUID)
+
+	page2, hasMore, err := repo.ListBatches(t.Context(), user, 2, 2)
+	require.NoError(t, err)
+	require.Len(t, page2, 1)
+	assert.False(t, hasMore)
+	assert.Equal(t, uuids[0], page2[0].UUID)
+}
+
+func TestListBatches_Empty(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	batches, hasMore, err := repo.ListBatches(t.Context(), user, 20, 0)
+	require.NoError(t, err)
+	assert.Empty(t, batches)
+	assert.False(t, hasMore)
+}
+
+func TestListBatches_IsolatedByUser(t *testing.T) {
+	repo := newRepository(t)
+	owner := storeUser(t, repo, "owner@email.com")
+	other := storeUser(t, repo, "other@email.com")
+	storeBatch(t, repo, owner, "raw")
+
+	batches, hasMore, err := repo.ListBatches(t.Context(), other, 20, 0)
+	require.NoError(t, err)
+	assert.Empty(t, batches)
+	assert.False(t, hasMore)
+}
+
+func TestListBatches_IssueCounts(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	batchID, _ := storeBatch(t, repo, user, "raw")
+
+	submitted := newIssueCreate(IssueParentBatch, batchID)
+	submittedID, err := repo.StoreIssue(t.Context(), user, submitted)
+	require.NoError(t, err)
+	require.NotZero(t, submittedID)
+
+	created := newIssueCreate(IssueParentBatch, batchID)
+	created.Subject = "created"
+	createdID, err := repo.StoreIssue(t.Context(), user, created)
+	require.NoError(t, err)
+	require.NotZero(t, createdID)
+
+	projektoveID := 42
+	require.NoError(t, repo.UpdateIssue(t.Context(), user, IssueParentBatch, batchID, submittedID, IssueUpdate{
+		Subject:      submitted.Subject,
+		Description:  submitted.Description,
+		ProjectID:    submitted.ProjectID,
+		StartDate:    submitted.StartDate,
+		DueDate:      submitted.DueDate,
+		AssignedToID: submitted.AssignedToID,
+		Status:       IssueStatusSubmitted,
+		ProjektoveID: &projektoveID,
+	}))
+
+	batches, hasMore, err := repo.ListBatches(t.Context(), user, 20, 0)
+	require.NoError(t, err)
+	require.Len(t, batches, 1)
+	assert.False(t, hasMore)
+	assert.Equal(t, 2, batches[0].TotalIssues)
+	assert.Equal(t, 1, batches[0].SubmittedIssues)
+}
+
+func TestListBatches_IssueCounts_ScopedToBatch(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	storeBatch(t, repo, user, "raw")
+
+	contextID, _ := storeContext(t, repo, user, "c1")
+	promptID, _ := storePrompt(t, repo, user, contextID)
+	_, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+
+	batches, hasMore, err := repo.ListBatches(t.Context(), user, 20, 0)
+	require.NoError(t, err)
+	require.Len(t, batches, 1)
+	assert.False(t, hasMore)
+	assert.Equal(t, 0, batches[0].TotalIssues)
+	assert.Equal(t, 0, batches[0].SubmittedIssues)
+}
+
 func TestUpdateAndListProjects(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")

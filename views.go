@@ -157,3 +157,23 @@ type PromptListView struct {
 	HasMore    bool
 	NextOffset int
 }
+
+type BatchListItem struct {
+	ID              string
+	CreatedAt       time.Time
+	TotalIssues     int
+	SubmittedIssues int
+}
+
+type BatchListView struct {
+	Items      []BatchListItem
+	HasMore    bool
+	NextOffset int
+}
+
+type BatchView struct {
+	ID          string
+	FileContent string
+	CreatedAt   time.Time
+	Issues      []IssueView
+}

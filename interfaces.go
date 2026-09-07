@@ -22,6 +22,11 @@ type Repository interface {
 	SetPromptProcessing(ctx context.Context, user User, id int, prompt string) error
 	CompletePrompt(ctx context.Context, user User, id int, obj PromptComplete) error
 
+	StoreBatch(ctx context.Context, user User, fileContent string) (id int, uuid string, err error)
+	ListBatches(ctx context.Context, user User, limit, offset int) ([]Batch, bool, error)
+	GetBatch(ctx context.Context, user User, id int) (Batch, error)
+	GetBatchByUUID(ctx context.Context, user User, uuid string) (Batch, error)
+
 	EnqueueTask(ctx context.Context, obj TaskCreate) (int, error)
 	ClaimTask(ctx context.Context) (Task, bool, error)
 	CompleteTask(ctx context.Context, id int, status TaskStatus, errMsg string) error
