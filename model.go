@@ -82,7 +82,6 @@ type ProjektoveIssueCreate struct {
 	ProjectID    int       `json:"project_id"`
 	StartDate    time.Time `json:"start_date,omitzero"`
 	DueDate      time.Time `json:"due_date,omitzero"`
-	AuthorID     int       `json:"author_id"`
 	AssignedToID int       `json:"assigned_to_id"`
 }
 

@@ -43,7 +43,7 @@ func (c Controller) Infer(ctx context.Context, user User, modelProvider string, 
 
 	generalContext, err := c.Repository.GetContext(ctx, user, contextID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("when fetching context %d", contextID)
+		return nil, 0, fmt.Errorf("when fetching context %d: %w", contextID, err)
 	}
 
 	prompt := fmt.Sprintf(`Given these meeting notes please create in structured
@@ -220,4 +220,141 @@ func (c Controller) ListContexts(ctx context.Context, user User) ([]ContextView,
 	}
 
 	return views, nil
+}
+
+func (c Controller) ListProjects(ctx context.Context, user User) ([]ProjectOptionView, error) {
+	projects, err := c.Projektove.GetProjects(ctx, user)
+	if err != nil {
+		return nil, fmt.Errorf("when listing projects: %w", err)
+	}
+
+	views := make([]ProjectOptionView, 0, len(projects))
+	for _, p := range projects {
+		views = append(views, ProjectOptionView{ID: p.ID, Name: p.Name})
+	}
+
+	return views, nil
+}
+
+func (c Controller) GetPrompt(ctx context.Context, user User, id int) (PromptView, error) {
+	prompt, err := c.Repository.GetPrompt(ctx, user, id)
+	if err != nil {
+		return PromptView{}, err
+	}
+
+	issues, err := c.Repository.ListIssues(ctx, user, IssueParentPrompt, id)
+	if err != nil {
+		return PromptView{}, fmt.Errorf("when listing issues: %w", err)
+	}
+
+	view := PromptView{
+		ID:          prompt.ID,
+		Prompt:      prompt.Prompt,
+		Result:      prompt.Result,
+		Error:       prompt.Error,
+		ContextName: prompt.Context.Name,
+		Issues:      make([]IssueView, 0, len(issues)),
+	}
+
+	for _, iss := range issues {
+		view.Issues = append(view.Issues, IssueView{
+			ID:           iss.ID,
+			Subject:      iss.Subject,
+			Description:  iss.Description,
+			ProjectID:    iss.ProjectID,
+			StartDate:    iss.StartDate,
+			DueDate:      iss.DueDate,
+			AssignedToID: iss.AssignedToID,
+			ProjektoveID: iss.ProjektoveID,
+			Status:       iss.Status,
+			Editable:     !isSubmitted(iss.Status),
+		})
+	}
+
+	return view, nil
+}
+
+func (c Controller) UpdateIssue(ctx context.Context, user User, promptID, issueID int, v IssueUpdateView) error {
+	iss, err := c.Repository.GetIssue(ctx, user, IssueParentPrompt, promptID, issueID)
+	if err != nil {
+		return err
+	}
+
+	if isSubmitted(iss.Status) {
+		return ErrIssueSubmitted
+	}
+
+	obj := IssueUpdate{
+		Subject:      v.Subject,
+		Description:  v.Description,
+		ProjectID:    v.ProjectID,
+		StartDate:    v.StartDate,
+		DueDate:      v.DueDate,
+		AssignedToID: v.AssignedToID,
+		Status:       iss.Status,
+		ProjektoveID: iss.ProjektoveID,
+	}
+
+	if err := c.Repository.UpdateIssue(ctx, user, IssueParentPrompt, promptID, issueID, obj); err != nil {
+		return fmt.Errorf("when updating issue: %w", err)
+	}
+
+	return nil
+}
+
+func (c Controller) SubmitIssue(ctx context.Context, user User, promptID, issueID int) error {
+	iss, err := c.Repository.GetIssue(ctx, user, IssueParentPrompt, promptID, issueID)
+	if err != nil {
+		return err
+	}
+
+	if isSubmitted(iss.Status) {
+		return ErrIssueSubmitted
+	}
+
+	obj := ProjektoveIssueCreate{
+		Subject:      iss.Subject,
+		Description:  iss.Description,
+		ProjectID:    iss.ProjectID,
+		StartDate:    iss.StartDate,
+		DueDate:      iss.DueDate,
+		AssignedToID: iss.AssignedToID,
+	}
+
+	created, err := c.Projektove.CreateIssue(ctx, user, obj)
+	if err != nil {
+		failStatus := IssueStatusSubmitFailed
+		if updateErr := c.Repository.UpdateIssue(ctx, user, IssueParentPrompt, promptID, issueID, IssueUpdate{
+			Subject:      iss.Subject,
+			Description:  iss.Description,
+			ProjectID:    iss.ProjectID,
+			StartDate:    iss.StartDate,
+			DueDate:      iss.DueDate,
+			AssignedToID: iss.AssignedToID,
+			Status:       failStatus,
+			ProjektoveID: iss.ProjektoveID,
+		}); updateErr != nil {
+			return fmt.Errorf("when creating issue: %v; when marking as failed: %w", err, updateErr)
+		}
+		return fmt.Errorf("when creating issue: %w", err)
+	}
+
+	if err := c.Repository.UpdateIssue(ctx, user, IssueParentPrompt, promptID, issueID, IssueUpdate{
+		Subject:      iss.Subject,
+		Description:  iss.Description,
+		ProjectID:    iss.ProjectID,
+		StartDate:    iss.StartDate,
+		DueDate:      iss.DueDate,
+		AssignedToID: iss.AssignedToID,
+		Status:       IssueStatusSubmitted,
+		ProjektoveID: &created.ID,
+	}); err != nil {
+		return fmt.Errorf("when marking issue as submitted: %w", err)
+	}
+
+	return nil
+}
+
+func isSubmitted(status IssueStatus) bool {
+	return status == IssueStatusSubmitted
 }

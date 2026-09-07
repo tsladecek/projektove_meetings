@@ -17,6 +17,7 @@ type LLM interface {
 type Repository interface {
 	StorePrompt(ctx context.Context, user User, obj PromptCreate) (int, error)
 	ListPrompts(ctx context.Context, user User) ([]Prompt, error)
+	GetPrompt(ctx context.Context, user User, id int) (Prompt, error)
 
 	UpdateProjectsCache(ctx context.Context, user User, projects []ProjektoveProject) error
 	ListProjects(ctx context.Context, user User) (ProjectsCacheEntry, error)
@@ -29,6 +30,7 @@ type Repository interface {
 	StoreIssue(ctx context.Context, user User, issue IssueCreate) (int, error)
 	UpdateIssue(ctx context.Context, user User, parent IssueParent, parentID int, id int, obj IssueUpdate) error
 	ListIssues(ctx context.Context, user User, parent IssueParent, parentID int) ([]Issue, error)
+	GetIssue(ctx context.Context, user User, parent IssueParent, parentID int, id int) (Issue, error)
 
 	GetUser(ctx context.Context, email string) (User, error)
 	StoreUser(ctx context.Context, obj UserCreate) (int, error)

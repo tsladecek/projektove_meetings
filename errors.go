@@ -8,6 +8,8 @@ var (
 	ErrContextNotFound                 = errors.New("context not found")
 	ErrContextInUse                    = errors.New("context is in use")
 	ErrIssueNotFound                   = errors.New("issue not found")
+	ErrPromptNotFound                  = errors.New("prompt not found")
+	ErrIssueSubmitted                  = errors.New("issue already submitted")
 	ErrModelNotFound                   = errors.New("model not found")
 	ErrParentDoesNotBelongToUser       = errors.New("parent does not belong to user")
 )

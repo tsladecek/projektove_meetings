@@ -154,6 +154,24 @@ func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User) ([]Prompt
 	return prompts, nil
 }
 
+func (r *RepositorySqlite) GetPrompt(ctx context.Context, user User, id int) (Prompt, error) {
+	p := Prompt{}
+	err := r.DB.QueryRowContext(ctx, `
+	SELECT p.id, p.prompt, p.result, p.error, c.id, c.name, c.context
+	FROM prompts p
+	JOIN contexts c ON p.context_id = c.id
+	WHERE p.id = ? AND p.user_id = ?
+	`, id, user.ID).Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Context.ID, &p.Context.Name, &p.Context.Context)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Prompt{}, ErrPromptNotFound
+		}
+		return Prompt{}, fmt.Errorf("when getting prompt: %w", err)
+	}
+
+	return p, nil
+}
+
 func (r *RepositorySqlite) UpdateProjectsCache(ctx context.Context, user User, projects []ProjektoveProject) error {
 	data, err := json.Marshal(projects)
 	if err != nil {
@@ -455,4 +473,26 @@ func (r *RepositorySqlite) ListIssues(ctx context.Context, user User, parent Iss
 	}
 
 	return issues, nil
+}
+
+func (r *RepositorySqlite) GetIssue(ctx context.Context, user User, parent IssueParent, parentID int, id int) (Issue, error) {
+	belongs, err := r.parentBelongsToUser(ctx, user, parent, parentID)
+	if err != nil {
+		return Issue{}, fmt.Errorf("when checking if parent belongs to user: %w", err)
+	}
+
+	if !belongs {
+		return Issue{}, ErrParentDoesNotBelongToUser
+	}
+
+	i := Issue{}
+	err = r.DB.QueryRowContext(ctx, "SELECT id, status, parent, parent_id, subject, description, project_id, start_date, due_date, assigned_to_id, projektove_id FROM issues WHERE parent = ? AND parent_id = ? AND id = ?", parent, parentID, id).Scan(&i.ID, &i.Status, &i.Parent, &i.ParentID, &i.Subject, &i.Description, &i.ProjectID, &i.StartDate, &i.DueDate, &i.AssignedToID, &i.ProjektoveID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Issue{}, ErrIssueNotFound
+		}
+		return Issue{}, fmt.Errorf("when getting issue: %w", err)
+	}
+
+	return i, nil
 }

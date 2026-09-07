@@ -3,6 +3,7 @@ package projektovemeeting
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -384,6 +385,74 @@ func TestUpdateIssue_ParentNotOwned(t *testing.T) {
 	promptID := storePrompt(t, repo, owner, storeContext(t, repo, owner, "c1"))
 
 	err := repo.UpdateIssue(t.Context(), other, IssueParentPrompt, promptID, 1, IssueUpdate{Status: IssueStatusSubmitted})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrParentDoesNotBelongToUser))
+}
+
+func TestGetPrompt(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+
+	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	require.NoError(t, err)
+	assert.Equal(t, strconv.Itoa(promptID), prompt.ID)
+	assert.Equal(t, "prompt", prompt.Prompt)
+	assert.Equal(t, "result", prompt.Result)
+	assert.Equal(t, "c1", prompt.Context.Name)
+}
+
+func TestGetPrompt_NotFound(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	_, err := repo.GetPrompt(t.Context(), user, 999)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrPromptNotFound))
+}
+
+func TestGetPrompt_NotOwned(t *testing.T) {
+	repo := newRepository(t)
+	owner := storeUser(t, repo, "owner@email.com")
+	other := storeUser(t, repo, "other@email.com")
+	promptID := storePrompt(t, repo, owner, storeContext(t, repo, owner, "c1"))
+
+	_, err := repo.GetPrompt(t.Context(), other, promptID)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrPromptNotFound))
+}
+
+func TestGetIssue(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+	issueID, err := repo.StoreIssue(t.Context(), user, newIssueCreate(IssueParentPrompt, promptID))
+	require.NoError(t, err)
+
+	issue, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
+	require.NoError(t, err)
+	assert.Equal(t, issueID, issue.ID)
+	assert.Equal(t, "subject", issue.Subject)
+	assert.Equal(t, IssueStatusCreated, issue.Status)
+}
+
+func TestGetIssue_NotFound(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+
+	_, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, 999)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrIssueNotFound))
+}
+
+func TestGetIssue_ParentNotOwned(t *testing.T) {
+	repo := newRepository(t)
+	owner := storeUser(t, repo, "owner@email.com")
+	other := storeUser(t, repo, "other@email.com")
+	promptID := storePrompt(t, repo, owner, storeContext(t, repo, owner, "c1"))
+
+	_, err := repo.GetIssue(t.Context(), other, IssueParentPrompt, promptID, 1)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrParentDoesNotBelongToUser))
 }

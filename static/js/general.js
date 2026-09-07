@@ -40,6 +40,24 @@ document.addEventListener("htmx:after:request", (e) => {
   if (t) {
     displaySuccess(t);
   }
+  const err = e.detail.ctx.response.headers.get("x-error");
+  if (err) {
+    displayError(err);
+  }
+});
+
+function submitAll() {
+  document.querySelectorAll("[data-submit-issue]").forEach((btn) => {
+    btn.disabled = true;
+    htmx.trigger(btn, "click");
+  });
+}
+
+document.addEventListener("htmx:afterSwap", (e) => {
+  const row = document.getElementById("submit-all-row");
+  if (row && !document.querySelector("[data-submit-issue]")) {
+    row.classList.add("hidden");
+  }
 });
 
 document.addEventListener("htmx:after:process:node", function (event) {

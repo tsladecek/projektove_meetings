@@ -92,3 +92,40 @@ type UserUpdateView struct {
 	ProjektoveToken string
 	Models          []LLMModelView
 }
+
+type IssueView struct {
+	ID           int
+	Subject      string
+	Description  string
+	ProjectID    int
+	StartDate    time.Time
+	DueDate      time.Time
+	AssignedToID int
+	ProjektoveID *int
+	Status       IssueStatus
+	Editable     bool
+	Error        string
+}
+
+type PromptView struct {
+	ID          string
+	Prompt      string
+	Result      string
+	Error       string
+	ContextName string
+	Issues      []IssueView
+}
+
+type IssueUpdateView struct {
+	Subject      string
+	Description  string
+	ProjectID    int
+	StartDate    time.Time
+	DueDate      time.Time
+	AssignedToID int
+}
+
+type ProjectOptionView struct {
+	ID   int
+	Name string
+}

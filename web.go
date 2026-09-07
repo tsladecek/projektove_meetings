@@ -1,6 +1,7 @@
 package projektovemeeting
 
 import (
+	"context"
 	"embed"
 	"errors"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	g "maragu.dev/gomponents"
 	"maragu.dev/gomponents-heroicons/v3/solid"
@@ -64,8 +66,8 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller) ht
 		listContexts: endAPI(http.MethodGet, "/contexts"),
 		createPrompt: endAPI(http.MethodPost, "/prompts"),
 
-		updateIssue: endAPI(http.MethodPut, "/issues"),
-		submitIssue: endAPI(http.MethodPost, "/issues/submit"),
+		updateIssue: endAPI(http.MethodPut, "/issues/{id}"),
+		submitIssue: endAPI(http.MethodPost, "/issues/{id}/submit"),
 	}
 
 	c := components{endpoints: e}
@@ -171,8 +173,34 @@ func (a api) newPrompt() http.HandlerFunc {
 
 func (a api) prompt() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		a.components.Page(a.components.PageStub("Prompt "+id, "Prompt detail not implemented yet.")).Render(w)
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil {
+			WriteError(w, "invalid prompt id", http.StatusBadRequest, err)
+			return
+		}
+
+		view, err := a.controller.GetPrompt(r.Context(), user, id)
+		if err != nil {
+			if errors.Is(err, ErrPromptNotFound) {
+				WriteError(w, "prompt not found", http.StatusNotFound, nil)
+				return
+			}
+			WriteError(w, "failed to load prompt", http.StatusInternalServerError, err)
+			return
+		}
+
+		projects, err := a.controller.ListProjects(r.Context(), user)
+		if err != nil {
+			projects = []ProjectOptionView{}
+		}
+
+		a.components.Page(a.components.PromptPage(view, projects, a.controller.Users)).Render(w)
 	}
 }
 
@@ -355,15 +383,147 @@ func (a api) createPrompt() http.HandlerFunc {
 	}
 }
 
+func parseDate(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse("2006-01-02", s)
+}
+
+func (a api) issueParams(w http.ResponseWriter, r *http.Request) (promptID, issueID int, ok bool) {
+	issueID, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		WriteError(w, "invalid issue id", http.StatusBadRequest, err)
+		return 0, 0, false
+	}
+
+	promptID, err = strconv.Atoi(r.Form.Get("prompt_id"))
+	if err != nil {
+		WriteError(w, "invalid prompt id", http.StatusBadRequest, err)
+		return 0, 0, false
+	}
+
+	return promptID, issueID, true
+}
+
+func (a api) renderIssueCard(ctx context.Context, w http.ResponseWriter, user User, promptID, issueID int, projects []ProjectOptionView, errMsg string) {
+	view, err := a.controller.GetPrompt(ctx, user, promptID)
+	if err != nil {
+		WriteError(w, "failed to load prompt", http.StatusInternalServerError, err)
+		return
+	}
+
+	for _, iss := range view.Issues {
+		if iss.ID == issueID {
+			iss.Error = errMsg
+			a.components.IssueCard(iss, strconv.Itoa(promptID), projects, a.controller.Users).Render(w)
+			return
+		}
+	}
+
+	WriteError(w, "issue not found", http.StatusNotFound, nil)
+}
+
 func (a api) updateIssue() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.notImplemented(w, "update issue not implemented")
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		promptID, issueID, ok := a.issueParams(w, r)
+		if !ok {
+			return
+		}
+
+		projectID, err := strconv.Atoi(r.Form.Get("project_id"))
+		if err != nil {
+			WriteError(w, "invalid project id", http.StatusBadRequest, err)
+			return
+		}
+		assigneeID, err := strconv.Atoi(r.Form.Get("assigned_to_id"))
+		if err != nil {
+			WriteError(w, "invalid assignee id", http.StatusBadRequest, err)
+			return
+		}
+		startDate, _ := parseDate(r.Form.Get("start_date"))
+		dueDate, _ := parseDate(r.Form.Get("due_date"))
+
+		v := IssueUpdateView{
+			Subject:      r.Form.Get("subject"),
+			Description:  r.Form.Get("description"),
+			ProjectID:    projectID,
+			AssignedToID: assigneeID,
+			StartDate:    startDate,
+			DueDate:      dueDate,
+		}
+
+		if err := a.controller.UpdateIssue(r.Context(), user, promptID, issueID, v); err != nil {
+			switch {
+			case errors.Is(err, ErrIssueSubmitted):
+				projects, _ := a.controller.ListProjects(r.Context(), user)
+				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "")
+				return
+			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
+				WriteError(w, "issue not found", http.StatusNotFound, nil)
+				return
+			default:
+				projects, _ := a.controller.ListProjects(r.Context(), user)
+				w.Header().Set("X-Error", "Failed to update issue")
+				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "Failed to update issue")
+				return
+			}
+		}
+
+		withSuccessToast(w)
+		projects, _ := a.controller.ListProjects(r.Context(), user)
+		a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "")
 	}
 }
 
 func (a api) submitIssue() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.notImplemented(w, "submit issue not implemented")
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		promptID, issueID, ok := a.issueParams(w, r)
+		if !ok {
+			return
+		}
+
+		projects, _ := a.controller.ListProjects(r.Context(), user)
+
+		if err := a.controller.SubmitIssue(r.Context(), user, promptID, issueID); err != nil {
+			switch {
+			case errors.Is(err, ErrIssueSubmitted):
+				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "")
+				return
+			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
+				WriteError(w, "issue not found", http.StatusNotFound, nil)
+				return
+			default:
+				w.Header().Set("X-Error", "Failed to submit issue")
+				a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "Failed to submit issue")
+				return
+			}
+		}
+
+		withSuccessToast(w)
+		a.renderIssueCard(r.Context(), w, user, promptID, issueID, projects, "")
 	}
 }
 
@@ -611,6 +771,201 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel) g.N
 	)
 }
 
+func dateValue(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("2006-01-02")
+}
+
+func (c components) PromptPage(view PromptView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+	issueCards := []g.Node{}
+	for _, iss := range view.Issues {
+		issueCards = append(issueCards, c.IssueCard(iss, view.ID, projects, users))
+	}
+
+	nodes := []g.Node{
+		h.Div(
+			h.Class("space-y-6 max-w-3xl"),
+			h.H1(h.Class("text-2xl font-bold mb-2"), g.Text("Prompt "+view.ID)),
+			h.Div(
+				h.Class("text-sm text-gray-500"),
+				g.Text("Context: "+view.ContextName),
+			),
+		),
+	}
+
+	if view.Error != "" {
+		nodes = append(nodes,
+			h.Div(
+				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3"),
+				g.Text(view.Error),
+			),
+		)
+	}
+
+	nodes = append(nodes,
+		h.Div(
+			h.Class("space-y-4"),
+			h.Div(
+				h.Class("space-y-1"),
+				h.H2(h.Class("text-lg font-semibold"), g.Text("Prompt")),
+				h.Pre(h.Class("whitespace-pre-wrap bg-gray-100 border rounded p-3 text-sm overflow-auto max-h-64"), g.Text(view.Prompt)),
+			),
+			h.Div(
+				h.Class("space-y-1"),
+				h.H2(h.Class("text-lg font-semibold"), g.Text("Result")),
+				h.Pre(h.Class("whitespace-pre-wrap bg-gray-100 border rounded p-3 text-sm overflow-auto max-h-64"), g.Text(view.Result)),
+			),
+		),
+	)
+
+	hasPending := false
+	for _, iss := range view.Issues {
+		if iss.Editable {
+			hasPending = true
+			break
+		}
+	}
+
+	if hasPending {
+		nodes = append(nodes,
+			h.Div(
+				h.ID("submit-all-row"),
+				h.Class("flex items-center gap-3"),
+				c.SubmitButton(
+					h.Type("button"),
+					g.Attr("onclick", "submitAll()"),
+				),
+				h.Span(h.Class("text-sm text-gray-500"), g.Text("Submit all pending issues")),
+			),
+		)
+	}
+
+	nodes = append(nodes, h.Div(h.Class("space-y-4"), g.Group(issueCards)))
+
+	return h.Div(g.Group(nodes))
+}
+
+func (c components) IssueCard(iss IssueView, promptID string, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+	cardID := "issue-" + strconv.Itoa(iss.ID)
+
+	if !iss.Editable {
+		status := g.Group([]g.Node{
+			solid.CheckCircle(h.Class("h-5 w-5 text-green-600")),
+			g.Text("Submitted"),
+		})
+		meta := ""
+		if iss.ProjektoveID != nil {
+			meta = "Projektove #" + strconv.Itoa(*iss.ProjektoveID)
+		}
+		return h.Div(
+			h.ID(cardID),
+			h.Class("border rounded p-4 flex items-start justify-between"),
+			h.Div(
+				h.Div(h.Class("font-medium"), g.Text(iss.Subject)),
+				h.Div(h.Class("text-sm text-gray-500"), g.Text(iss.Description)),
+			),
+			h.Div(
+				h.Class("flex items-center gap-2 text-green-700 text-sm"),
+				status,
+				g.Text(meta),
+			),
+		)
+	}
+
+	projectOpts := []g.Node{}
+	if iss.ProjectID == 0 {
+		projectOpts = append(projectOpts, h.Option(h.Value("0"), h.Selected(), g.Text("No project")))
+	} else {
+		projectOpts = append(projectOpts, h.Option(h.Value("0"), g.Text("No project")))
+	}
+	for _, p := range projects {
+		opts := []g.Node{h.Value(strconv.Itoa(p.ID)), g.Text(p.Name)}
+		if p.ID == iss.ProjectID {
+			opts = append([]g.Node{h.Selected()}, opts...)
+		}
+		projectOpts = append(projectOpts, h.Option(opts...))
+	}
+
+	userOpts := []g.Node{}
+	if iss.AssignedToID == 0 {
+		userOpts = append(userOpts, h.Option(h.Value("0"), h.Selected(), g.Text("Unassigned")))
+	} else {
+		userOpts = append(userOpts, h.Option(h.Value("0"), g.Text("Unassigned")))
+	}
+	for _, u := range users {
+		opts := []g.Node{h.Value(strconv.Itoa(u.ID)), g.Text(u.Name)}
+		if u.ID == iss.AssignedToID {
+			opts = append([]g.Node{h.Selected()}, opts...)
+		}
+		userOpts = append(userOpts, h.Option(opts...))
+	}
+
+	updatePath := strings.Replace(c.endpoints.updateIssue.Path(), "{id}", strconv.Itoa(iss.ID), 1)
+	submitPath := strings.Replace(c.endpoints.submitIssue.Path(), "{id}", strconv.Itoa(iss.ID), 1)
+	indicator := "#submit-indicator-" + strconv.Itoa(iss.ID)
+
+	return h.Form(
+		h.ID(cardID),
+		h.Class("border rounded p-4 space-y-3"),
+		g.If(iss.Error != "", h.Div(h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-3 py-2 text-sm"), g.Text(iss.Error))),
+		h.Input(h.Type("hidden"), h.Name("prompt_id"), h.Value(promptID)),
+		h.Input(h.Type("text"), h.Name("subject"), h.Value(iss.Subject), h.Required(), h.Class("w-full px-3 py-2 border rounded font-medium")),
+		h.Textarea(h.Name("description"), h.Rows("2"), h.Class("w-full px-3 py-2 border rounded"), g.Text(iss.Description)),
+
+		h.Div(
+			h.Class("grid grid-cols-2 gap-3"),
+			h.Div(
+				h.Class("space-y-1"),
+				h.Label(h.Class("block text-sm text-gray-500"), g.Text("Project")),
+				h.Select(h.Name("project_id"), h.Class("w-full px-3 py-2 border rounded"), g.Group(projectOpts)),
+			),
+			h.Div(
+				h.Class("space-y-1"),
+				h.Label(h.Class("block text-sm text-gray-500"), g.Text("Assignee")),
+				h.Select(h.Name("assigned_to_id"), h.Class("w-full px-3 py-2 border rounded"), g.Group(userOpts)),
+			),
+			h.Div(
+				h.Class("space-y-1"),
+				h.Label(h.Class("block text-sm text-gray-500"), g.Text("Start date")),
+				h.Input(h.Type("date"), h.Name("start_date"), h.Value(dateValue(iss.StartDate)), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			h.Div(
+				h.Class("space-y-1"),
+				h.Label(h.Class("block text-sm text-gray-500"), g.Text("Due date")),
+				h.Input(h.Type("date"), h.Name("due_date"), h.Value(dateValue(iss.DueDate)), h.Class("w-full px-3 py-2 border rounded")),
+			),
+		),
+
+		h.Div(
+			h.Class("flex items-center gap-2"),
+			c.SaveButton(
+				h.Type("button"),
+				htmx.Put(updatePath),
+				htmx.Include("closest form"),
+				htmx.Target("#"+cardID),
+				htmx.Swap("outerHTML"),
+			),
+			c.SubmitButton(
+				h.Type("button"),
+				g.Attr("data-submit-issue", ""),
+				htmx.Post(submitPath),
+				htmx.Include("closest form"),
+				htmx.Target("#"+cardID),
+				htmx.Swap("outerHTML"),
+				htmx.Indicator(indicator),
+			),
+			h.Span(
+				h.ID("submit-indicator-"+strconv.Itoa(iss.ID)),
+				h.Class("htmx-indicator inline-flex items-center gap-1 text-sm text-gray-500"),
+				solid.ArrowPath(h.Class("h-4 w-4 animate-spin")),
+				g.Text("Submitting..."),
+			),
+		),
+	)
+}
+
 func (c components) ContextRow(cx ContextView) g.Node {
 	return h.Div(
 		h.Class("context-row flex justify-between items-center border rounded px-3 py-2"),
@@ -671,6 +1026,13 @@ func (c components) CreateButton(opts ...g.Node) g.Node {
 	return c.button(
 		baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 disabled:bg-gray-400 disabled:hover:bg-gray-400",
 		append(opts, solid.Sparkles(h.Class("h-4 w-4")), g.Text("Create issues"))...,
+	)
+}
+
+func (c components) SubmitButton(opts ...g.Node) g.Node {
+	return c.button(
+		baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 disabled:bg-gray-400 disabled:hover:bg-gray-400",
+		append(opts, solid.PaperAirplane(h.Class("h-4 w-4")), g.Text("Submit"))...,
 	)
 }
 
