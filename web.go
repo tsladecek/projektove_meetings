@@ -1342,7 +1342,7 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 				h.Class("space-y-1"),
 				h.H2(h.Class("text-lg font-semibold"), g.Text("Prompt")),
 				h.Textarea(
-					h.Class("space-y-1 w-full bg-gray-100 border rounded p-2 text-gray-600"),
+					h.Class("font-mono space-y-1 w-full bg-gray-100 border rounded p-2 text-gray-600"),
 					g.Text(view.Prompt),
 					h.Disabled(),
 					h.Rows("5"),
@@ -1352,7 +1352,7 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 				h.Class("space-y-1"),
 				h.H2(h.Class("text-lg font-semibold"), g.Text("Result")),
 				h.Textarea(
-					h.Class("space-y-1 w-full bg-gray-100 border rounded p-2 text-gray-600"),
+					h.Class("font-mono space-y-1 w-full bg-gray-100 border rounded p-2 text-gray-600"),
 					g.Text(view.Result),
 					h.Disabled(),
 					h.Rows("5"),
@@ -1399,10 +1399,16 @@ func (c components) BatchFragment(view BatchView, projects []ProjectOptionView, 
 			h.Class("space-y-6 max-w-3xl"),
 			h.H1(h.Class("text-2xl font-bold mb-2"), g.Text("Batch "+view.ID)),
 		),
+
 		h.Div(
 			h.Class("space-y-1"),
-			h.H2(h.Class("text-lg font-semibold"), g.Text("Raw file content")),
-			h.Pre(h.Class("whitespace-pre-wrap bg-gray-100 border rounded p-3 text-sm overflow-auto max-h-64"), g.Text(view.FileContent)),
+			h.H2(h.Class("text-lg font-semibold"), g.Text("Result")),
+			h.Textarea(
+				h.Class("font-mono space-y-1 w-full bg-gray-100 border rounded p-2 text-gray-600"),
+				g.Text(view.FileContent),
+				h.Disabled(),
+				h.Rows("5"),
+			),
 		),
 	}
 
