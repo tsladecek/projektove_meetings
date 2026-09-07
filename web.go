@@ -118,7 +118,7 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 
 func (a api) root() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.components.Page(h.Div(g.Text("root"))).Render(w)
+		a.components.Page(a.components.RootPage()).Render(w)
 	}
 }
 
@@ -787,6 +787,91 @@ func (c components) Sidebar() g.Node {
 	return h.Aside(
 		h.Class("w-16 md:w-56 bg-gray-800 text-white flex flex-col items-center md:items-stretch p-4"),
 		g.Group(navBlocks),
+	)
+}
+
+func (c components) RootPage() g.Node {
+	step := func(num, title, text string) g.Node {
+		return h.Li(
+			h.Class("flex items-start gap-3"),
+			h.Span(
+				h.Class("flex items-center justify-center h-6 w-6 rounded-full bg-gray-800 text-white text-sm font-medium shrink-0"),
+				g.Text(num),
+			),
+			h.Div(
+				h.H3(h.Class("font-semibold"), g.Text(title)),
+				h.P(h.Class("text-sm text-gray-500"), g.Text(text)),
+			),
+		)
+	}
+
+	card := func(href, title, text string, icon g.Node) g.Node {
+		return h.A(
+			h.Href(href),
+			h.Div(
+				h.Class("border rounded p-4 hover:bg-gray-100 flex flex-col gap-2"),
+				h.Div(
+					h.Class("flex items-center gap-2"),
+					icon,
+					h.H2(h.Class("text-lg font-semibold"), g.Text(title)),
+				),
+				h.P(h.Class("text-sm text-gray-500"), g.Text(text)),
+				h.Span(
+					h.Class("text-sm font-medium flex items-center gap-1 mt-1"),
+					g.Text("Open"),
+					solid.ArrowRight(h.Class("h-4 w-4")),
+				),
+			),
+		)
+	}
+
+	return h.Div(
+		h.Class("max-w-3xl space-y-8"),
+
+		h.Div(
+			h.H1(h.Class("text-2xl font-bold"), g.Text("Meetings to Issues")),
+			h.P(
+				h.Class("text-gray-500 mt-1"),
+				g.Text("Turn meeting notes and CSV tables into Projektove issues. Review, edit and submit them in one place."),
+			),
+		),
+
+		h.Div(
+			h.H2(h.Class("text-lg font-semibold mb-3"), g.Text("How it works")),
+			h.Ol(
+				h.Class("space-y-3"),
+				step("1", "Upload", "Import meeting notes (.txt/.md) or a CSV table of issues."),
+				step("2", "Review and edit", "Parsed issues are listed and can be edited before anything is submitted."),
+				step("3", "Submit", "Send issues to the Projektove tracker, one by one or all at once."),
+				step("4", "Track", "See the submission status on every prompt and batch."),
+			),
+		),
+
+		h.Div(
+			h.H2(h.Class("text-lg font-semibold mb-3"), g.Text("Get started")),
+			h.Div(
+				h.Class("grid lg:grid-cols-2 gap-4"),
+				card(
+					c.endpoints.newPrompt.Path(),
+					"From meeting notes",
+					"Upload meeting notes and an LLM extracts action items into issues, which you then review and submit.",
+					solid.DocumentText(h.Class("h-6 w-6 shrink-0")),
+				),
+				card(
+					c.endpoints.newBatch.Path(),
+					"From a CSV table",
+					"Upload a CSV table of issues. It is validated before the issues are created, then you review and submit them.",
+					solid.ArrowUpTray(h.Class("h-6 w-6 shrink-0")),
+				),
+			),
+		),
+
+		h.Div(
+			h.Class("text-sm text-gray-500"),
+			g.Text("Before you start, set your "),
+			h.A(h.Href(c.endpoints.user.Path()), h.Class("underline"), g.Text("Projektove token and LLM model")),
+			g.Text(" on the User page."),
+		),
 	)
 }
 
