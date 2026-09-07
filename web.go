@@ -31,7 +31,7 @@ type api struct {
 	components components
 }
 
-func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, projektoveIssueEndpoint string) http.Handler {
+func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, projektoveIssueEndpoint, logoutEndpoint string) http.Handler {
 	m := http.NewServeMux()
 
 	burl, err := url.Parse(baseURL)
@@ -50,6 +50,7 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 	e := endpoints{
 		root:   end(http.MethodGet, "/"),
 		static: end(http.MethodGet, "/static/"),
+		logout: end(http.MethodGet, logoutEndpoint),
 
 		// pages
 		user:      end(http.MethodGet, "/user"),
@@ -685,6 +686,7 @@ func (a api) submitIssue() http.HandlerFunc {
 type endpoints struct {
 	root   Endpoint
 	static Endpoint
+	logout Endpoint
 
 	// pages
 	user      Endpoint
@@ -783,6 +785,20 @@ func (c components) Sidebar() g.Node {
 		}
 		navBlocks = append(navBlocks, h.Nav(h.Class("space-y-1 w-full"), g.Group(items)))
 	}
+
+	navBlocks = append(navBlocks,
+		h.Div(h.Class("flex-1")),
+		h.Hr(h.Class("border-gray-700 my-2")),
+		h.Nav(h.Class("space-y-1 w-full"),
+			h.A(
+				h.Href(c.endpoints.logout.Path()),
+				h.Title("Logout"),
+				h.Class("flex items-center justify-center md:justify-start gap-3 w-full px-2 py-2 rounded hover:bg-gray-700"),
+				solid.ArrowRightOnRectangle(h.Class("h-5 w-5 shrink-0")),
+				h.Span(h.Class("hidden md:inline"), g.Text("Logout")),
+			),
+		),
+	)
 
 	return h.Aside(
 		h.Class("w-16 md:w-56 bg-gray-800 text-white flex flex-col items-center md:items-stretch p-4"),
@@ -896,7 +912,7 @@ func (c components) PromptsBatch(view PromptListView) g.Node {
 		rows = append(rows, c.loadMoreButton(c.endpoints.prompts.Path()+"?offset="+strconv.Itoa(view.NextOffset)))
 	}
 
-	return h.Div(g.Group(rows))
+	return h.Div(g.Group(rows), h.Class("flex flex-col gap-2"))
 }
 
 func (c components) promptRow(it PromptListItem) g.Node {
@@ -923,8 +939,8 @@ func (c components) promptRow(it PromptListItem) g.Node {
 			h.Class("border hover:bg-gray-100 grid grid-rows-4 justify-center lg:grid-rows-1 lg:grid-cols-4 rounded px-3 py-2 items-center"),
 			h.Div(
 				h.Class("block min-w-0"),
-				h.Div(h.Class("font-small"), g.Text(it.ID)),
-				h.Div(h.Class("text-sm text-gray-500 truncate"), g.Text(it.ContextName)),
+				h.Div(h.Class("font-sm"), g.Text(it.ID)),
+				h.Div(h.Class("text-sm text-gray-500 truncate text-center lg:text-left"), g.Text(it.ContextName)),
 			),
 			h.Div(h.Class("text-sm text-gray-500 whitespace-nowrap text-center"), g.Text(it.CreatedAt.Format("2006-01-02 15:04"))),
 			h.Span(

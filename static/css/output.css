@@ -645,6 +645,16 @@
       grid-template-rows: repeat(1, minmax(0, 1fr));
     }
   }
+  .lg\:text-left {
+    @media (width >= 64rem) {
+      text-align: left;
+    }
+  }
+  .lg\:text-start {
+    @media (width >= 64rem) {
+      text-align: start;
+    }
+  }
 }
 @property --tw-rotate-x {
   syntax: "*";

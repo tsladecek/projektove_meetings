@@ -52,7 +52,7 @@ func run() error {
 		return fmt.Errorf("when constructing auth adapter: %w", err)
 	}
 
-	handler := projektovemeeting.NewHandler(auth, "/", config.OIDC.IDTokenCookieName, controller, config.Projektove.IssueEndpoint)
+	handler := projektovemeeting.NewHandler(auth, "/", config.OIDC.IDTokenCookieName, controller, config.Projektove.IssueEndpoint, config.OIDC.LogoutEndpoint)
 
 	server := http.Server{Addr: fmt.Sprintf(":%d", config.Port), Handler: handler}
 
