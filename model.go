@@ -36,6 +36,52 @@ const (
 	IssueStatusSubmitFailed IssueStatus = "submit_failed"
 )
 
+type PromptStatus string
+
+const (
+	PromptStatusCreated    PromptStatus = "created"
+	PromptStatusProcessing PromptStatus = "processing"
+	PromptStatusDone       PromptStatus = "done"
+	PromptStatusError      PromptStatus = "error"
+)
+
+func (s PromptStatus) IsPending() bool {
+	return s == PromptStatusCreated || s == PromptStatusProcessing
+}
+
+type TaskType string
+
+const (
+	TaskTypeInference TaskType = "inference"
+)
+
+type TaskStatus string
+
+const (
+	TaskStatusPending    TaskStatus = "pending"
+	TaskStatusProcessing TaskStatus = "processing"
+	TaskStatusDone       TaskStatus = "done"
+	TaskStatusFailed     TaskStatus = "failed"
+)
+
+type InferenceJob struct {
+	UserID   int `json:"user_id"`
+	PromptID int `json:"prompt_id"`
+}
+
+type TaskCreate struct {
+	Type    TaskType
+	Payload InferenceJob
+}
+
+type Task struct {
+	ID      int
+	Type    TaskType
+	Payload InferenceJob
+	Status  TaskStatus
+	Error   string
+}
+
 type ProjektoveProject struct {
 	ID          int    `json:"id"`
 	Name        string `json:"name"`
@@ -125,11 +171,15 @@ type Issue struct {
 }
 
 type Prompt struct {
-	ID      string
-	Prompt  string
-	Result  string
-	Error   string
-	Context LLMContext
+	ID          string
+	Prompt      string
+	Result      string
+	Error       string
+	Context     LLMContext
+	Status      PromptStatus
+	Provider    string
+	Model       string
+	FileContent string
 }
 
 type LLMContext struct {

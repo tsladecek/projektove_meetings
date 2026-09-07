@@ -3,7 +3,6 @@ package projektovemeeting
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 )
@@ -16,34 +15,101 @@ type Controller struct {
 	Users          ProjektoveUsers
 }
 
-func (c Controller) Infer(ctx context.Context, user User, modelProvider string, modelName string, contextID int, meeting string, users []ProjektoveUser) ([]Issue, int, error) {
-	projects, err := c.Projektove.GetProjects(ctx, user)
+func (c Controller) RunInference(ctx context.Context, job InferenceJob) error {
+	user, err := c.Repository.GetUserByID(ctx, job.UserID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("when listing projects: %w", err)
+		return fmt.Errorf("when loading user %d: %w", job.UserID, err)
 	}
 
-	model, found := user.GetModel(LLMProvider(modelProvider), modelName)
+	prompt, err := c.Repository.GetPrompt(ctx, user, job.PromptID)
+	if err != nil {
+		return fmt.Errorf("when loading prompt %d: %w", job.PromptID, err)
+	}
+	if !prompt.Status.IsPending() {
+		return nil
+	}
+
+	projects, err := c.Projektove.GetProjects(ctx, user)
+	if err != nil {
+		c.failPrompt(ctx, user, job.PromptID, PromptComplete{}, fmt.Errorf("when listing projects: %w", err))
+		return err
+	}
+
+	model, found := user.GetModel(LLMProvider(prompt.Provider), prompt.Model)
 	if !found {
-		return nil, 0, ErrModelNotFound
+		c.failPrompt(ctx, user, job.PromptID, PromptComplete{}, ErrModelNotFound)
+		return ErrModelNotFound
 	}
 
 	llm, err := c.NewLLMProvider(model.Provider, model.Model, model.Token)
 	if err != nil {
-		return nil, 0, fmt.Errorf("when setting up llm: %w", err)
+		c.failPrompt(ctx, user, job.PromptID, PromptComplete{}, fmt.Errorf("when setting up llm: %w", err))
+		return err
 	}
 
+	promptText, err := buildInferencePrompt(projects, c.Users, prompt.Context.Context, prompt.FileContent)
+	if err != nil {
+		c.failPrompt(ctx, user, job.PromptID, PromptComplete{}, err)
+		return err
+	}
+
+	if err := c.Repository.SetPromptProcessing(ctx, user, job.PromptID, promptText); err != nil {
+		return fmt.Errorf("when marking prompt as processing: %w", err)
+	}
+
+	slog.Debug("Inferring...", "prompt_id", job.PromptID)
+	inference, err := llm.Infer(ctx, promptText)
+	slog.Debug("Inference done", "prompt_id", job.PromptID)
+	if err != nil {
+		c.failPrompt(ctx, user, job.PromptID, PromptComplete{Prompt: promptText, Result: inference}, err)
+		return err
+	}
+
+	objs := []IssueCreate{}
+	if err := json.Unmarshal([]byte(inference), &objs); err != nil {
+		c.failPrompt(ctx, user, job.PromptID, PromptComplete{Prompt: promptText, Result: inference}, fmt.Errorf("when unmarshalling response: %w", err))
+		return err
+	}
+
+	if err := c.TxProvider.Transact(func(repo Repository) error {
+		for _, iss := range objs {
+			iss.Parent = IssueParentPrompt
+			iss.ParentID = job.PromptID
+			if _, err := repo.StoreIssue(ctx, user, iss); err != nil {
+				return fmt.Errorf("when storing issue: %w", err)
+			}
+		}
+		if err := repo.CompletePrompt(ctx, user, job.PromptID, PromptComplete{Prompt: promptText, Result: inference, Status: PromptStatusDone}); err != nil {
+			return fmt.Errorf("when marking prompt as done: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("when storing inference results: %w", err)
+	}
+
+	return nil
+}
+
+func (c Controller) failPrompt(ctx context.Context, user User, promptID int, partial PromptComplete, cause error) {
+	slog.Error("Inference failed", "prompt_id", promptID, "err", cause.Error())
+	if err := c.Repository.CompletePrompt(ctx, user, promptID, PromptComplete{
+		Prompt: partial.Prompt,
+		Result: partial.Result,
+		Error:  cause.Error(),
+		Status: PromptStatusError,
+	}); err != nil {
+		slog.Error("Failed to mark prompt as errored", "prompt_id", promptID, "err", err.Error())
+	}
+}
+
+func buildInferencePrompt(projects []ProjektoveProject, users []ProjektoveUser, contextText, meeting string) (string, error) {
 	projectsMarshalled, err := json.Marshal(projects)
 	if err != nil {
-		return nil, 0, fmt.Errorf("when encoding projects")
+		return "", fmt.Errorf("when encoding projects: %w", err)
 	}
 	usersMarshalled, err := json.Marshal(users)
 	if err != nil {
-		return nil, 0, fmt.Errorf("when encoding users")
-	}
-
-	generalContext, err := c.Repository.GetContext(ctx, user, contextID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("when fetching context %d: %w", contextID, err)
+		return "", fmt.Errorf("when encoding users: %w", err)
 	}
 
 	prompt := fmt.Sprintf(`Given these meeting notes please create in structured
@@ -95,53 +161,9 @@ func (c Controller) Infer(ctx context.Context, user User, modelProvider string, 
 
 	Meeting notes:
 	%s
-	`, usersMarshalled, projectsMarshalled, generalContext.Context, meeting)
+	`, usersMarshalled, projectsMarshalled, contextText, meeting)
 
-	issues := []Issue{}
-	promptID := 0
-
-	err = c.TxProvider.Transact(func(repo Repository) error {
-		slog.Debug("Inferring...")
-		inference, err := llm.Infer(ctx, prompt)
-		if err != nil {
-			resultErr := err
-			_, err := c.Repository.StorePrompt(ctx, user, PromptCreate{Prompt: prompt, Result: inference, Error: err, ContextID: contextID})
-			if err != nil {
-				resultErr = errors.Join(err, fmt.Errorf("when storing prompt: %w", err))
-			}
-			return fmt.Errorf("when prompting the llm: %w", resultErr)
-		}
-
-		slog.Debug("Inference done")
-
-		promptID, err = c.Repository.StorePrompt(ctx, user, PromptCreate{Prompt: prompt, Result: inference, Error: nil, ContextID: contextID})
-		if err != nil {
-			slog.Error("Error occured while storing prompt", "err", err.Error())
-		}
-
-		objs := []IssueCreate{}
-		if err := json.Unmarshal([]byte(inference), &objs); err != nil {
-			return fmt.Errorf("when unmarshalling response: %w", err)
-		}
-
-		for _, iss := range objs {
-			iss.Parent = IssueParentPrompt
-			iss.ParentID = promptID
-			id, err := repo.StoreIssue(ctx, user, iss)
-			if err != nil {
-				return fmt.Errorf("when storing issue: %w", err)
-			}
-
-			issues = append(issues, iss.ToDomain(id))
-		}
-		return nil
-	})
-
-	if err != nil {
-		return nil, 0, fmt.Errorf("when running inference and storing results: %w", err)
-	}
-
-	return issues, promptID, nil
+	return prompt, nil
 }
 
 func (c Controller) GetUserProfile(ctx context.Context, user User) (UserProfileView, error) {
@@ -200,9 +222,30 @@ func (c Controller) DeleteContext(ctx context.Context, user User, id int) error 
 }
 
 func (c Controller) CreatePrompt(ctx context.Context, user User, modelProvider, modelName string, contextID int, meeting string) (int, error) {
-	_, promptID, err := c.Infer(ctx, user, modelProvider, modelName, contextID, meeting, c.Users)
-	if err != nil {
-		return 0, err
+	if _, found := user.GetModel(LLMProvider(modelProvider), modelName); !found {
+		return 0, ErrModelNotFound
+	}
+
+	promptID := 0
+	if err := c.TxProvider.Transact(func(repo Repository) error {
+		id, err := repo.StorePrompt(ctx, user, PromptCreate{
+			ContextID:   contextID,
+			Status:      PromptStatusCreated,
+			Provider:    modelProvider,
+			Model:       modelName,
+			FileContent: meeting,
+		})
+		if err != nil {
+			return fmt.Errorf("when storing prompt: %w", err)
+		}
+		promptID = id
+
+		if _, err := repo.EnqueueTask(ctx, TaskCreate{Type: TaskTypeInference, Payload: InferenceJob{UserID: user.ID, PromptID: id}}); err != nil {
+			return fmt.Errorf("when enqueuing inference task: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return 0, fmt.Errorf("when creating prompt: %w", err)
 	}
 
 	return promptID, nil
@@ -253,6 +296,7 @@ func (c Controller) GetPrompt(ctx context.Context, user User, id int) (PromptVie
 		Result:      prompt.Result,
 		Error:       prompt.Error,
 		ContextName: prompt.Context.Name,
+		Status:      prompt.Status,
 		Issues:      make([]IssueView, 0, len(issues)),
 	}
 

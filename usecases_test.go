@@ -12,9 +12,11 @@ import (
 )
 
 type fakeProjektove struct {
-	createResult ProjektoveIssue
-	createErr    error
-	created      []ProjektoveIssueCreate
+	createResult   ProjektoveIssue
+	createErr      error
+	created        []ProjektoveIssueCreate
+	getProjectsRes []ProjektoveProject
+	getProjectsErr error
 }
 
 func (f *fakeProjektove) CreateIssue(ctx context.Context, user User, obj ProjektoveIssueCreate) (ProjektoveIssue, error) {
@@ -26,7 +28,16 @@ func (f *fakeProjektove) CreateIssue(ctx context.Context, user User, obj Projekt
 }
 
 func (f *fakeProjektove) GetProjects(ctx context.Context, user User) ([]ProjektoveProject, error) {
-	return nil, nil
+	return f.getProjectsRes, f.getProjectsErr
+}
+
+type fakeLLM struct {
+	result string
+	err    error
+}
+
+func (f *fakeLLM) Infer(ctx context.Context, prompt string) (string, error) {
+	return f.result, f.err
 }
 
 func TestControllerGetPrompt(t *testing.T) {
@@ -193,4 +204,177 @@ func TestSubmitIssue_Submitted(t *testing.T) {
 	err = c.SubmitIssue(t.Context(), user, promptID, issueID)
 	assert.True(t, errors.Is(err, ErrIssueSubmitted))
 	assert.Empty(t, p.created)
+}
+
+func TestControllerCreatePrompt_EnqueuesTask(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	storeUser(t, repo, "user@email.com")
+	user, err := repo.GetUser(t.Context(), "user@email.com")
+	require.NoError(t, err)
+	contextID := storeContext(t, repo, user, "c1")
+
+	c := Controller{Repository: repo, TxProvider: txp, Users: ProjektoveUsers{{ID: 1, Name: "u1"}}}
+
+	promptID, err := c.CreatePrompt(t.Context(), user, "googleai", "gemini", contextID, "meeting notes")
+	require.NoError(t, err)
+	require.NotZero(t, promptID)
+
+	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	require.NoError(t, err)
+	assert.Equal(t, PromptStatusCreated, prompt.Status)
+	assert.Equal(t, "googleai", prompt.Provider)
+	assert.Equal(t, "gemini", prompt.Model)
+	assert.Equal(t, "meeting notes", prompt.FileContent)
+	assert.Empty(t, prompt.Prompt)
+	assert.Empty(t, prompt.Result)
+
+	task, ok, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, TaskTypeInference, task.Type)
+	assert.Equal(t, InferenceJob{UserID: user.ID, PromptID: promptID}, task.Payload)
+}
+
+func TestControllerCreatePrompt_ModelNotFound(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID := storeContext(t, repo, user, "c1")
+
+	c := Controller{Repository: repo, TxProvider: txp}
+
+	_, err := c.CreatePrompt(t.Context(), user, "nope", "model", contextID, "meeting notes")
+	assert.True(t, errors.Is(err, ErrModelNotFound))
+
+	// nothing was stored since the transaction was aborted before the task
+	_, ok, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestRunInference(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID := storeContext(t, repo, user, "c1")
+	promptID := storePromptAt(t, repo, user, contextID, "googleai", "gemini", PromptStatusCreated)
+
+	projects := []ProjektoveProject{{ID: 1, Name: "p1", Description: "d1"}}
+	p := &fakeProjektove{getProjectsRes: projects}
+	llm := &fakeLLM{result: `[{"subject": "t1", "description": "d1", "project_id": 1, "assigned_to_id": 1}]`}
+
+	c := Controller{
+		Repository: repo,
+		TxProvider: txp,
+		Projektove: p,
+		Users:      ProjektoveUsers{{ID: 1, Name: "u1"}},
+		NewLLMProvider: func(provider LLMProvider, model string, token string) (LLM, error) {
+			return llm, nil
+		},
+	}
+
+	err := c.RunInference(t.Context(), InferenceJob{UserID: user.ID, PromptID: promptID})
+	require.NoError(t, err)
+
+	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	require.NoError(t, err)
+	assert.Equal(t, PromptStatusDone, prompt.Status)
+	assert.NotEmpty(t, prompt.Prompt)
+	assert.NotEmpty(t, prompt.Result)
+	assert.Empty(t, prompt.Error)
+	assert.Contains(t, prompt.Prompt, "p1")
+	assert.Contains(t, prompt.Prompt, "u1")
+
+	issues, err := repo.ListIssues(t.Context(), user, IssueParentPrompt, promptID)
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "t1", issues[0].Subject)
+	assert.Equal(t, 1, issues[0].ProjectID)
+}
+
+func TestRunInference_SkipsNonPending(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+
+	c := Controller{Repository: repo, TxProvider: txp, Projektove: &fakeProjektove{}, NewLLMProvider: func(provider LLMProvider, model string, token string) (LLM, error) {
+		return &fakeLLM{}, nil
+	}}
+
+	err := c.RunInference(t.Context(), InferenceJob{UserID: user.ID, PromptID: promptID})
+	require.NoError(t, err)
+
+	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	require.NoError(t, err)
+	assert.Equal(t, PromptStatusDone, prompt.Status)
+	assert.Equal(t, "prompt", prompt.Prompt)
+}
+
+func TestRunInference_LLMError(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePromptAt(t, repo, user, storeContext(t, repo, user, "c1"), "googleai", "gemini", PromptStatusCreated)
+
+	p := &fakeProjektove{getProjectsRes: []ProjektoveProject{{ID: 1, Name: "p1", Description: "d1"}}}
+	c := Controller{
+		Repository: repo,
+		TxProvider: txp,
+		Projektove: p,
+		NewLLMProvider: func(provider LLMProvider, model string, token string) (LLM, error) {
+			return &fakeLLM{err: errors.New("boom")}, nil
+		},
+	}
+
+	err := c.RunInference(t.Context(), InferenceJob{UserID: user.ID, PromptID: promptID})
+	require.Error(t, err)
+
+	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	require.NoError(t, err)
+	assert.Equal(t, PromptStatusError, prompt.Status)
+	assert.Equal(t, "boom", prompt.Error)
+	assert.Empty(t, prompt.Result)
+}
+
+func TestRunInference_UnmarshalError(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePromptAt(t, repo, user, storeContext(t, repo, user, "c1"), "googleai", "gemini", PromptStatusCreated)
+
+	c := Controller{
+		Repository: repo,
+		TxProvider: txp,
+		Projektove: &fakeProjektove{getProjectsRes: []ProjektoveProject{{ID: 1, Name: "p1", Description: "d1"}}},
+		NewLLMProvider: func(provider LLMProvider, model string, token string) (LLM, error) {
+			return &fakeLLM{result: "not json"}, nil
+		},
+	}
+
+	err := c.RunInference(t.Context(), InferenceJob{UserID: user.ID, PromptID: promptID})
+	require.Error(t, err)
+
+	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	require.NoError(t, err)
+	assert.Equal(t, PromptStatusError, prompt.Status)
+	assert.Contains(t, prompt.Error, "when unmarshalling response")
+}
+
+func TestRunInference_ProjectsError(t *testing.T) {
+	repo, txp := newAppRepos(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePromptAt(t, repo, user, storeContext(t, repo, user, "c1"), "googleai", "gemini", PromptStatusCreated)
+
+	c := Controller{
+		Repository: repo,
+		TxProvider: txp,
+		Projektove: &fakeProjektove{getProjectsErr: errors.New("net down")},
+		NewLLMProvider: func(provider LLMProvider, model string, token string) (LLM, error) {
+			return &fakeLLM{}, nil
+		},
+	}
+
+	err := c.RunInference(t.Context(), InferenceJob{UserID: user.ID, PromptID: promptID})
+	require.Error(t, err)
+
+	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	require.NoError(t, err)
+	assert.Equal(t, PromptStatusError, prompt.Status)
+	assert.Contains(t, prompt.Error, "when listing projects")
 }

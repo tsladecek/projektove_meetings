@@ -33,6 +33,13 @@ func storePrompt(t *testing.T, repo Repository, user User, contextID int) int {
 	return id
 }
 
+func storePromptAt(t *testing.T, repo Repository, user User, contextID int, provider, model string, status PromptStatus) int {
+	t.Helper()
+	id, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "prompt", Result: "result", ContextID: contextID, Provider: provider, Model: model, Status: status})
+	require.NoError(t, err)
+	return id
+}
+
 func TestUser(t *testing.T) {
 	repo := newRepository(t)
 	ctx := t.Context()
@@ -420,6 +427,218 @@ func TestGetPrompt_NotOwned(t *testing.T) {
 	_, err := repo.GetPrompt(t.Context(), other, promptID)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrPromptNotFound))
+}
+
+func TestGetUserByID(t *testing.T) {
+	repo := newRepository(t)
+	obj := UserCreate{Email: "user@email.com", ProjektoveToken: "token", Models: []LLMModel{{Provider: "googleai", Model: "gemini", Token: "g-token"}}}
+
+	id, err := repo.StoreUser(t.Context(), obj)
+	require.NoError(t, err)
+
+	user, err := repo.GetUserByID(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, id, user.ID)
+	assert.Equal(t, obj.Email, user.Email)
+	assert.Equal(t, obj.ProjektoveToken, user.ProjektoveToken)
+	require.Len(t, user.LLMModels, 1)
+	assert.Equal(t, "gemini", user.LLMModels[0].Model)
+}
+
+func TestGetUserByID_NotFound(t *testing.T) {
+	repo := newRepository(t)
+
+	_, err := repo.GetUserByID(t.Context(), 999)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUserNotFound))
+}
+
+func TestSetPromptProcessing(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+
+	err := repo.SetPromptProcessing(t.Context(), user, promptID, "full prompt")
+	require.NoError(t, err)
+
+	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	require.NoError(t, err)
+	assert.Equal(t, PromptStatusProcessing, prompt.Status)
+	assert.Equal(t, "full prompt", prompt.Prompt)
+}
+
+func TestSetPromptProcessing_NotFound(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	err := repo.SetPromptProcessing(t.Context(), user, 999, "prompt")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrPromptNotFound))
+}
+
+func TestCompletePrompt(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+
+	err := repo.CompletePrompt(t.Context(), user, promptID, PromptComplete{
+		Status: PromptStatusDone,
+		Prompt: "p",
+		Result: "r",
+	})
+	require.NoError(t, err)
+
+	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	require.NoError(t, err)
+	assert.Equal(t, PromptStatusDone, prompt.Status)
+	assert.Equal(t, "p", prompt.Prompt)
+	assert.Equal(t, "r", prompt.Result)
+	assert.Empty(t, prompt.Error)
+}
+
+func TestCompletePrompt_Error(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	promptID := storePrompt(t, repo, user, storeContext(t, repo, user, "c1"))
+
+	err := repo.CompletePrompt(t.Context(), user, promptID, PromptComplete{
+		Status: PromptStatusError,
+		Error:  "boom",
+	})
+	require.NoError(t, err)
+
+	prompt, err := repo.GetPrompt(t.Context(), user, promptID)
+	require.NoError(t, err)
+	assert.Equal(t, PromptStatusError, prompt.Status)
+	assert.Equal(t, "boom", prompt.Error)
+}
+
+func TestCompletePrompt_NotFound(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	err := repo.CompletePrompt(t.Context(), user, 999, PromptComplete{Status: PromptStatusDone})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrPromptNotFound))
+}
+
+func TestEnqueueTask(t *testing.T) {
+	repo := newRepository(t)
+
+	id, err := repo.EnqueueTask(t.Context(), TaskCreate{Type: TaskTypeInference, Payload: InferenceJob{UserID: 1, PromptID: 2}})
+	require.NoError(t, err)
+	require.NotZero(t, id)
+
+	task, ok, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, id, task.ID)
+	assert.Equal(t, TaskTypeInference, task.Type)
+	assert.Equal(t, TaskStatusProcessing, task.Status)
+	assert.Equal(t, InferenceJob{UserID: 1, PromptID: 2}, task.Payload)
+}
+
+func TestClaimTask_Empty(t *testing.T) {
+	repo := newRepository(t)
+
+	_, ok, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestClaimTask_Exclusive(t *testing.T) {
+	repo := newRepository(t)
+
+	id1, err := repo.EnqueueTask(t.Context(), TaskCreate{Type: TaskTypeInference, Payload: InferenceJob{UserID: 1, PromptID: 1}})
+	require.NoError(t, err)
+	id2, err := repo.EnqueueTask(t.Context(), TaskCreate{Type: TaskTypeInference, Payload: InferenceJob{UserID: 2, PromptID: 2}})
+	require.NoError(t, err)
+
+	task1, ok1, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok1)
+	task2, ok2, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok2)
+	assert.NotEqual(t, task1.ID, task2.ID)
+
+	// a claimed task must not be claimable again
+	_, ok, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	ids := []int{task1.ID, task2.ID}
+	assert.ElementsMatch(t, []int{id1, id2}, ids)
+}
+
+func TestCompleteTask(t *testing.T) {
+	repo := newRepository(t)
+
+	id, err := repo.EnqueueTask(t.Context(), TaskCreate{Type: TaskTypeInference, Payload: InferenceJob{UserID: 1, PromptID: 1}})
+	require.NoError(t, err)
+
+	_, ok, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	err = repo.CompleteTask(t.Context(), id, TaskStatusDone, "")
+	require.NoError(t, err)
+
+	// done tasks are not claimable
+	_, ok, err = repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestCompleteTask_Failure(t *testing.T) {
+	repo := newRepository(t)
+
+	id, err := repo.EnqueueTask(t.Context(), TaskCreate{Type: TaskTypeInference, Payload: InferenceJob{UserID: 1, PromptID: 1}})
+	require.NoError(t, err)
+
+	_, ok, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	err = repo.CompleteTask(t.Context(), id, TaskStatusFailed, "boom")
+	require.NoError(t, err)
+
+	// failed tasks are not claimable either
+	_, ok, err = repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestResetOrphanedTasks(t *testing.T) {
+	repo := newRepository(t)
+
+	doneID, err := repo.EnqueueTask(t.Context(), TaskCreate{Type: TaskTypeInference, Payload: InferenceJob{UserID: 1, PromptID: 1}})
+	require.NoError(t, err)
+	orphanID, err := repo.EnqueueTask(t.Context(), TaskCreate{Type: TaskTypeInference, Payload: InferenceJob{UserID: 2, PromptID: 2}})
+	require.NoError(t, err)
+	failedID, err := repo.EnqueueTask(t.Context(), TaskCreate{Type: TaskTypeInference, Payload: InferenceJob{UserID: 3, PromptID: 3}})
+	require.NoError(t, err)
+
+	_, ok, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, ok, err = repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, ok, err = repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	require.NoError(t, repo.CompleteTask(t.Context(), doneID, TaskStatusDone, ""))
+	require.NoError(t, repo.CompleteTask(t.Context(), failedID, TaskStatusFailed, "boom"))
+
+	require.NoError(t, repo.ResetOrphanedTasks(t.Context()))
+
+	// the reset task becomes pending and claimable again
+	task, ok, err := repo.ClaimTask(t.Context())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, orphanID, task.ID)
 }
 
 func TestGetIssue(t *testing.T) {

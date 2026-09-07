@@ -63,10 +63,21 @@ type LLMContextCreate struct {
 }
 
 type PromptCreate struct {
-	Prompt    string
-	Result    string
-	Error     error
-	ContextID int
+	Prompt      string
+	Result      string
+	Error       error
+	ContextID   int
+	Status      PromptStatus
+	Provider    string
+	Model       string
+	FileContent string
+}
+
+type PromptComplete struct {
+	Prompt string
+	Result string
+	Error  string
+	Status PromptStatus
 }
 
 type LLMModelView struct {
@@ -113,6 +124,7 @@ type PromptView struct {
 	Result      string
 	Error       string
 	ContextName string
+	Status      PromptStatus
 	Issues      []IssueView
 }
 

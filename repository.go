@@ -109,8 +109,12 @@ func (r *RepositorySqlite) StorePrompt(ctx context.Context, user User, obj Promp
 		errStr = obj.Error.Error()
 	}
 
-	query := `INSERT INTO prompts (prompt, result, error, context_id, user_id) VALUES (?, ?, ?, ?, ?)`
-	result, execErr := r.DB.ExecContext(ctx, query, obj.Prompt, obj.Result, errStr, obj.ContextID, user.ID)
+	if obj.Status == "" {
+		obj.Status = PromptStatusDone
+	}
+
+	query := `INSERT INTO prompts (prompt, result, error, context_id, user_id, status, provider, model, file_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	result, execErr := r.DB.ExecContext(ctx, query, obj.Prompt, obj.Result, errStr, obj.ContextID, user.ID, obj.Status, obj.Provider, obj.Model, obj.FileContent)
 	if execErr != nil {
 		return 0, fmt.Errorf("failed to store prompt: %w", execErr)
 	}
@@ -128,7 +132,7 @@ func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User) ([]Prompt
 
 	rows, err := r.DB.QueryContext(ctx, `
 	SELECT
-	p.id, p.prompt, p.result, p.error, c.id, c.name, c.context
+	p.id, p.prompt, p.result, p.error, p.status, p.provider, p.model, p.file_content, c.id, c.name, c.context
 	FROM prompts p
 	JOIN contexts c ON p.context_id = c.id
 	WHERE p.user_id = ?
@@ -141,7 +145,7 @@ func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User) ([]Prompt
 
 	for rows.Next() {
 		p := Prompt{}
-		if err := rows.Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Context.ID, &p.Context.Name, &p.Context.Context); err != nil {
+		if err := rows.Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.Context.ID, &p.Context.Name, &p.Context.Context); err != nil {
 			return nil, fmt.Errorf("when scanning results: %w", err)
 		}
 		prompts = append(prompts, p)
@@ -157,11 +161,11 @@ func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User) ([]Prompt
 func (r *RepositorySqlite) GetPrompt(ctx context.Context, user User, id int) (Prompt, error) {
 	p := Prompt{}
 	err := r.DB.QueryRowContext(ctx, `
-	SELECT p.id, p.prompt, p.result, p.error, c.id, c.name, c.context
+	SELECT p.id, p.prompt, p.result, p.error, p.status, p.provider, p.model, p.file_content, c.id, c.name, c.context
 	FROM prompts p
 	JOIN contexts c ON p.context_id = c.id
 	WHERE p.id = ? AND p.user_id = ?
-	`, id, user.ID).Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Context.ID, &p.Context.Name, &p.Context.Context)
+	`, id, user.ID).Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.Context.ID, &p.Context.Name, &p.Context.Context)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Prompt{}, ErrPromptNotFound
@@ -170,6 +174,112 @@ func (r *RepositorySqlite) GetPrompt(ctx context.Context, user User, id int) (Pr
 	}
 
 	return p, nil
+}
+
+func (r *RepositorySqlite) SetPromptProcessing(ctx context.Context, user User, id int, prompt string) error {
+	result, err := r.DB.ExecContext(ctx, `UPDATE prompts SET status = ?, prompt = ? WHERE id = ? AND user_id = ?`, PromptStatusProcessing, prompt, id, user.ID)
+	if err != nil {
+		return fmt.Errorf("failed to mark prompt as processing: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrPromptNotFound
+	}
+
+	return nil
+}
+
+func (r *RepositorySqlite) CompletePrompt(ctx context.Context, user User, id int, obj PromptComplete) error {
+	result, err := r.DB.ExecContext(ctx, `UPDATE prompts SET prompt = ?, result = ?, error = ?, status = ? WHERE id = ? AND user_id = ?`, obj.Prompt, obj.Result, obj.Error, obj.Status, id, user.ID)
+	if err != nil {
+		return fmt.Errorf("failed to complete prompt: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrPromptNotFound
+	}
+
+	return nil
+}
+
+func (r *RepositorySqlite) EnqueueTask(ctx context.Context, obj TaskCreate) (int, error) {
+	payload, err := json.Marshal(obj.Payload)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal task payload: %w", err)
+	}
+
+	result, err := r.DB.ExecContext(ctx, `INSERT INTO tasks (type, payload, status) VALUES (?, ?, ?)`, obj.Type, string(payload), TaskStatusPending)
+	if err != nil {
+		return 0, fmt.Errorf("failed to enqueue task: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last insert id: %w", err)
+	}
+
+	return int(id), nil
+}
+
+func (r *RepositorySqlite) ClaimTask(ctx context.Context) (Task, bool, error) {
+	var t Task
+	var typ string
+	var payload []byte
+
+	err := r.DB.QueryRowContext(ctx, `SELECT id, type, payload FROM tasks WHERE status = ? ORDER BY id LIMIT 1`, TaskStatusPending).Scan(&t.ID, &typ, &payload)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Task{}, false, nil
+		}
+		return Task{}, false, fmt.Errorf("when finding pending task: %w", err)
+	}
+
+	result, err := r.DB.ExecContext(ctx, `UPDATE tasks SET status = ?, started_at = ? WHERE id = ? AND status = ?`, TaskStatusProcessing, time.Now().UTC(), t.ID, TaskStatusPending)
+	if err != nil {
+		return Task{}, false, fmt.Errorf("when claiming task: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return Task{}, false, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return Task{}, false, nil
+	}
+
+	t.Type = TaskType(typ)
+	if err := json.Unmarshal(payload, &t.Payload); err != nil {
+		return Task{}, false, fmt.Errorf("failed to unmarshal task payload: %w", err)
+	}
+	t.Status = TaskStatusProcessing
+
+	return t, true, nil
+}
+
+func (r *RepositorySqlite) CompleteTask(ctx context.Context, id int, status TaskStatus, errMsg string) error {
+	_, err := r.DB.ExecContext(ctx, `UPDATE tasks SET status = ?, error = ?, finished_at = ? WHERE id = ?`, status, errMsg, time.Now().UTC(), id)
+	if err != nil {
+		return fmt.Errorf("failed to complete task: %w", err)
+	}
+
+	return nil
+}
+
+func (r *RepositorySqlite) ResetOrphanedTasks(ctx context.Context) error {
+	_, err := r.DB.ExecContext(ctx, `UPDATE tasks SET status = ?, error = NULL, started_at = NULL, finished_at = NULL WHERE status = ?`, TaskStatusPending, TaskStatusProcessing)
+	if err != nil {
+		return fmt.Errorf("failed to reset orphaned tasks: %w", err)
+	}
+
+	return nil
 }
 
 func (r *RepositorySqlite) UpdateProjectsCache(ctx context.Context, user User, projects []ProjektoveProject) error {
@@ -280,34 +390,59 @@ func (r *RepositorySqlite) DeleteContext(ctx context.Context, user User, id int)
 
 func (r *RepositorySqlite) GetUser(ctx context.Context, email string) (User, error) {
 	u := User{Email: email, LLMModels: make([]LLMModel, 0)}
-	if err := r.DB.QueryRowContext(ctx, "SELECT id, projektove_token, is_admin FROM users WHERE email = ?", email).Scan(&u.ID, &u.ProjektoveToken, &u.IsAdmin); err != nil {
+	err := r.DB.QueryRowContext(ctx, "SELECT id, projektove_token, is_admin FROM users WHERE email = ?", email).Scan(&u.ID, &u.ProjektoveToken, &u.IsAdmin)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, ErrUserNotFound
 		}
 		return User{}, fmt.Errorf("when fetching user: %w", err)
 	}
 
-	rows, err := r.DB.QueryContext(ctx, "SELECT id, provider, model, token FROM providers WHERE user_id = ?", u.ID)
+	if err := r.loadProviders(ctx, &u); err != nil {
+		return User{}, err
+	}
 
+	return u, nil
+}
+
+func (r *RepositorySqlite) GetUserByID(ctx context.Context, id int) (User, error) {
+	u := User{ID: id, LLMModels: make([]LLMModel, 0)}
+	err := r.DB.QueryRowContext(ctx, "SELECT email, projektove_token, is_admin FROM users WHERE id = ?", id).Scan(&u.Email, &u.ProjektoveToken, &u.IsAdmin)
 	if err != nil {
-		return User{}, fmt.Errorf("when fetching providers: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return User{}, ErrUserNotFound
+		}
+		return User{}, fmt.Errorf("when fetching user: %w", err)
+	}
+
+	if err := r.loadProviders(ctx, &u); err != nil {
+		return User{}, err
+	}
+
+	return u, nil
+}
+
+func (r *RepositorySqlite) loadProviders(ctx context.Context, u *User) error {
+	rows, err := r.DB.QueryContext(ctx, "SELECT id, provider, model, token FROM providers WHERE user_id = ?", u.ID)
+	if err != nil {
+		return fmt.Errorf("when fetching providers: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		m := LLMModel{}
 		if err := rows.Scan(&m.ID, &m.Provider, &m.Model, &m.Token); err != nil {
-			return User{}, fmt.Errorf("when scanning results: %w", err)
+			return fmt.Errorf("when scanning results: %w", err)
 		}
 
 		u.LLMModels = append(u.LLMModels, m)
 	}
 
 	if err := rows.Err(); err != nil {
-		return User{}, fmt.Errorf("when iterating over results: %w", err)
+		return fmt.Errorf("when iterating over results: %w", err)
 	}
 
-	return u, nil
+	return nil
 }
 
 func (r *RepositorySqlite) StoreUser(ctx context.Context, obj UserCreate) (int, error) {

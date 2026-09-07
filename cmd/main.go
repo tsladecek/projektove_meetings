@@ -43,6 +43,10 @@ func run() error {
 
 	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, NewLLMProvider: projektovemeeting.NewLLM, Users: config.Projektove.Users, TxProvider: txp}
 
+	queue := projektovemeeting.NewInferenceQueue(repo, projektovemeeting.DefaultQueueWorkers, projektovemeeting.DefaultQueuePollInterval, controller.RunInference)
+	queue.Start()
+	defer queue.Stop()
+
 	auth, err := projektovemeeting.NewAuth(repo, config.OIDC, config.BaseURL)
 	if err != nil {
 		return fmt.Errorf("when constructing auth adapter: %w", err)

@@ -18,6 +18,13 @@ type Repository interface {
 	StorePrompt(ctx context.Context, user User, obj PromptCreate) (int, error)
 	ListPrompts(ctx context.Context, user User) ([]Prompt, error)
 	GetPrompt(ctx context.Context, user User, id int) (Prompt, error)
+	SetPromptProcessing(ctx context.Context, user User, id int, prompt string) error
+	CompletePrompt(ctx context.Context, user User, id int, obj PromptComplete) error
+
+	EnqueueTask(ctx context.Context, obj TaskCreate) (int, error)
+	ClaimTask(ctx context.Context) (Task, bool, error)
+	CompleteTask(ctx context.Context, id int, status TaskStatus, errMsg string) error
+	ResetOrphanedTasks(ctx context.Context) error
 
 	UpdateProjectsCache(ctx context.Context, user User, projects []ProjektoveProject) error
 	ListProjects(ctx context.Context, user User) (ProjectsCacheEntry, error)
@@ -33,6 +40,7 @@ type Repository interface {
 	GetIssue(ctx context.Context, user User, parent IssueParent, parentID int, id int) (Issue, error)
 
 	GetUser(ctx context.Context, email string) (User, error)
+	GetUserByID(ctx context.Context, id int) (User, error)
 	StoreUser(ctx context.Context, obj UserCreate) (int, error)
 	UpdateUser(ctx context.Context, user User, obj UserUpdate) error
 }

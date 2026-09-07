@@ -200,7 +200,12 @@ func (a api) prompt() http.HandlerFunc {
 			projects = []ProjectOptionView{}
 		}
 
-		a.components.Page(a.components.PromptPage(view, projects, a.controller.Users)).Render(w)
+		fragment := a.components.PromptFragment(view, projects, a.controller.Users)
+		if r.Header.Get("HX-Request") != "" {
+			fragment.Render(w)
+			return
+		}
+		a.components.Page(fragment).Render(w)
 	}
 }
 
@@ -737,7 +742,6 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel) g.N
 					h.Name("model"),
 					h.Required(),
 					h.Class("w-full px-3 py-2 border rounded"),
-					h.Option(h.Value(""), g.Text("Select a model")),
 					g.Group(modelOpts),
 				),
 			),
@@ -749,7 +753,6 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel) g.N
 					h.Name("context_id"),
 					h.Required(),
 					h.Class("w-full px-3 py-2 border rounded"),
-					h.Option(h.Value(""), g.Text("Select a context")),
 					g.Group(contextOpts),
 				),
 			),
@@ -778,7 +781,27 @@ func dateValue(t time.Time) string {
 	return t.Format("2006-01-02")
 }
 
-func (c components) PromptPage(view PromptView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+func (c components) PromptFragment(view PromptView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+	if view.Status.IsPending() {
+		return h.Div(
+			h.ID("prompt-view"),
+			htmx.Get("/prompts/"+view.ID),
+			htmx.Trigger("every 5s"),
+			htmx.Swap("outerHTML"),
+			h.Class("space-y-6 max-w-3xl"),
+			h.H1(h.Class("text-2xl font-bold mb-2"), g.Text("Prompt "+view.ID)),
+			h.Div(
+				h.Class("text-sm text-gray-500"),
+				g.Text("Context: "+view.ContextName),
+			),
+			h.Div(
+				h.Class("flex items-center gap-3 text-gray-500 py-8"),
+				solid.ArrowPath(h.Class("h-5 w-5 animate-spin")),
+				g.Text("Processing..."),
+			),
+		)
+	}
+
 	issueCards := []g.Node{}
 	for _, iss := range view.Issues {
 		issueCards = append(issueCards, c.IssueCard(iss, view.ID, projects, users))
@@ -844,7 +867,7 @@ func (c components) PromptPage(view PromptView, projects []ProjectOptionView, us
 
 	nodes = append(nodes, h.Div(h.Class("space-y-4"), g.Group(issueCards)))
 
-	return h.Div(g.Group(nodes))
+	return h.Div(h.ID("prompt-view"), h.Class("flex flex-col gap-4"), g.Group(nodes))
 }
 
 func (c components) IssueCard(iss IssueView, promptID string, projects []ProjectOptionView, users []ProjektoveUser) g.Node {

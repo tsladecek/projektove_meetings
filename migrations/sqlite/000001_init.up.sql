@@ -29,8 +29,23 @@ CREATE TABLE IF NOT EXISTS prompts (
     error TEXT,
     context_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('created', 'processing', 'done', 'error')),
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    file_content TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (context_id) REFERENCES contexts(id)
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'done', 'failed')),
+    error TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS projects (
