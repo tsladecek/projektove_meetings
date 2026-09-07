@@ -5,7 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"time"
 )
+
+func CurrentTime() time.Time {
+	return time.Now().UTC()
+}
 
 func WriteError(w http.ResponseWriter, message string, status int, err error) {
 	if err != nil {

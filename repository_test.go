@@ -2,7 +2,6 @@ package projektovemeeting
 
 import (
 	"errors"
-	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -240,24 +239,92 @@ func TestListPrompts(t *testing.T) {
 	require.NoError(t, err)
 	require.NotZero(t, id2)
 
-	prompts, err := repo.ListPrompts(t.Context(), user)
+	prompts, hasMore, err := repo.ListPrompts(t.Context(), user, 20, 0)
 	require.NoError(t, err)
 	require.Len(t, prompts, 2)
+	assert.False(t, hasMore)
 
-	ids := []string{}
-	for _, p := range prompts {
-		ids = append(ids, p.ID)
+	// newest first
+	assert.Equal(t, strconv.Itoa(id2), prompts[0].ID)
+	assert.Equal(t, strconv.Itoa(id1), prompts[1].ID)
+
+	// created_at is populated on store
+	assert.False(t, prompts[0].CreatedAt.IsZero())
+}
+
+func TestListPrompts_Pagination(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID := storeContext(t, repo, user, "c1")
+
+	ids := []int{}
+	for i := 0; i < 3; i++ {
+		id, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "p", ContextID: contextID})
+		require.NoError(t, err)
+		ids = append(ids, id)
 	}
-	assert.ElementsMatch(t, []string{fmt.Sprint(id1), fmt.Sprint(id2)}, ids)
+
+	page1, hasMore, err := repo.ListPrompts(t.Context(), user, 2, 0)
+	require.NoError(t, err)
+	require.Len(t, page1, 2)
+	assert.True(t, hasMore)
+	assert.Equal(t, strconv.Itoa(ids[2]), page1[0].ID)
+	assert.Equal(t, strconv.Itoa(ids[1]), page1[1].ID)
+
+	page2, hasMore, err := repo.ListPrompts(t.Context(), user, 2, 2)
+	require.NoError(t, err)
+	require.Len(t, page2, 1)
+	assert.False(t, hasMore)
+	assert.Equal(t, strconv.Itoa(ids[0]), page2[0].ID)
+}
+
+func TestListPrompts_IssueCounts(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID := storeContext(t, repo, user, "c1")
+
+	promptID, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "p1", ContextID: contextID})
+	require.NoError(t, err)
+
+	submitted := newIssueCreate(IssueParentPrompt, promptID)
+	submittedID, err := repo.StoreIssue(t.Context(), user, submitted)
+	require.NoError(t, err)
+	require.NotZero(t, submittedID)
+
+	done := newIssueCreate(IssueParentPrompt, promptID)
+	done.Subject = "done"
+	doneID, err := repo.StoreIssue(t.Context(), user, done)
+	require.NoError(t, err)
+	require.NotZero(t, doneID)
+
+	projektoveID := 42
+	require.NoError(t, repo.UpdateIssue(t.Context(), user, IssueParentPrompt, promptID, submittedID, IssueUpdate{
+		Subject:      submitted.Subject,
+		Description:  submitted.Description,
+		ProjectID:    submitted.ProjectID,
+		StartDate:    submitted.StartDate,
+		DueDate:      submitted.DueDate,
+		AssignedToID: submitted.AssignedToID,
+		Status:       IssueStatusSubmitted,
+		ProjektoveID: &projektoveID,
+	}))
+
+	prompts, hasMore, err := repo.ListPrompts(t.Context(), user, 20, 0)
+	require.NoError(t, err)
+	require.Len(t, prompts, 1)
+	assert.False(t, hasMore)
+	assert.Equal(t, 2, prompts[0].TotalIssues)
+	assert.Equal(t, 1, prompts[0].SubmittedIssues)
 }
 
 func TestListPrompts_Empty(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
 
-	prompts, err := repo.ListPrompts(t.Context(), user)
+	prompts, hasMore, err := repo.ListPrompts(t.Context(), user, 20, 0)
 	require.NoError(t, err)
 	assert.Empty(t, prompts)
+	assert.False(t, hasMore)
 }
 
 func TestUpdateAndListProjects(t *testing.T) {

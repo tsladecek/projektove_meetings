@@ -171,15 +171,18 @@ type Issue struct {
 }
 
 type Prompt struct {
-	ID          string
-	Prompt      string
-	Result      string
-	Error       string
-	Context     LLMContext
-	Status      PromptStatus
-	Provider    string
-	Model       string
-	FileContent string
+	ID              string
+	Prompt          string
+	Result          string
+	Error           string
+	Context         LLMContext
+	Status          PromptStatus
+	Provider        string
+	Model           string
+	FileContent     string
+	CreatedAt       time.Time
+	TotalIssues     int
+	SubmittedIssues int
 }
 
 type LLMContext struct {

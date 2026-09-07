@@ -114,8 +114,12 @@ func (r *RepositorySqlite) StorePrompt(ctx context.Context, user User, obj Promp
 		obj.Status = PromptStatusDone
 	}
 
-	query := `INSERT INTO prompts (prompt, result, error, context_id, user_id, status, provider, model, file_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	result, execErr := r.DB.ExecContext(ctx, query, obj.Prompt, obj.Result, errStr, obj.ContextID, user.ID, obj.Status, obj.Provider, obj.Model, obj.FileContent)
+	if obj.CreatedAt.IsZero() {
+		obj.CreatedAt = CurrentTime()
+	}
+
+	query := `INSERT INTO prompts (prompt, result, error, context_id, user_id, status, provider, model, file_content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	result, execErr := r.DB.ExecContext(ctx, query, obj.Prompt, obj.Result, errStr, obj.ContextID, user.ID, obj.Status, obj.Provider, obj.Model, obj.FileContent, obj.CreatedAt)
 	if execErr != nil {
 		return 0, fmt.Errorf("failed to store prompt: %w", execErr)
 	}
@@ -128,45 +132,55 @@ func (r *RepositorySqlite) StorePrompt(ctx context.Context, user User, obj Promp
 	return int(id), nil
 }
 
-func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User) ([]Prompt, error) {
+func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User, limit, offset int) ([]Prompt, bool, error) {
 	prompts := []Prompt{}
 
 	rows, err := r.DB.QueryContext(ctx, `
 	SELECT
-	p.id, p.prompt, p.result, p.error, p.status, p.provider, p.model, p.file_content, c.id, c.name, c.context
+	p.id, p.prompt, p.result, p.error, p.status, p.provider, p.model, p.file_content, p.created_at, c.id, c.name, c.context,
+	(SELECT COUNT(*) FROM issues i WHERE i.parent = 'prompt' AND i.parent_id = p.id) AS total_issues,
+	(SELECT COUNT(*) FROM issues i WHERE i.parent = 'prompt' AND i.parent_id = p.id AND i.status = 'submitted') AS submitted_issues
 	FROM prompts p
 	JOIN contexts c ON p.context_id = c.id
 	WHERE p.user_id = ?
-	`, user.ID)
+	ORDER BY p.id DESC
+	LIMIT ? OFFSET ?
+	`, user.ID, limit+1, offset)
 	if err != nil {
-		return nil, fmt.Errorf("when listing prompts")
+		return nil, false, fmt.Errorf("when listing prompts: %w", err)
 	}
 
 	defer rows.Close()
 
 	for rows.Next() {
 		p := Prompt{}
-		if err := rows.Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.Context.ID, &p.Context.Name, &p.Context.Context); err != nil {
-			return nil, fmt.Errorf("when scanning results: %w", err)
+		if err := rows.Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.CreatedAt, &p.Context.ID, &p.Context.Name, &p.Context.Context, &p.TotalIssues, &p.SubmittedIssues); err != nil {
+			return nil, false, fmt.Errorf("when scanning results: %w", err)
 		}
 		prompts = append(prompts, p)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("when iterating over results: %w", err)
+		return nil, false, fmt.Errorf("when iterating over results: %w", err)
 	}
 
-	return prompts, nil
+	hasMore := false
+	if len(prompts) > limit {
+		hasMore = true
+		prompts = prompts[:limit]
+	}
+
+	return prompts, hasMore, nil
 }
 
 func (r *RepositorySqlite) GetPrompt(ctx context.Context, user User, id int) (Prompt, error) {
 	p := Prompt{}
 	err := r.DB.QueryRowContext(ctx, `
-	SELECT p.id, p.prompt, p.result, p.error, p.status, p.provider, p.model, p.file_content, c.id, c.name, c.context
+	SELECT p.id, p.prompt, p.result, p.error, p.status, p.provider, p.model, p.file_content, p.created_at, c.id, c.name, c.context
 	FROM prompts p
 	JOIN contexts c ON p.context_id = c.id
 	WHERE p.id = ? AND p.user_id = ?
-	`, id, user.ID).Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.Context.ID, &p.Context.Name, &p.Context.Context)
+	`, id, user.ID).Scan(&p.ID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.Provider, &p.Model, &p.FileContent, &p.CreatedAt, &p.Context.ID, &p.Context.Name, &p.Context.Context)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Prompt{}, ErrPromptNotFound

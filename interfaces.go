@@ -16,7 +16,7 @@ type LLM interface {
 
 type Repository interface {
 	StorePrompt(ctx context.Context, user User, obj PromptCreate) (int, error)
-	ListPrompts(ctx context.Context, user User) ([]Prompt, error)
+	ListPrompts(ctx context.Context, user User, limit, offset int) ([]Prompt, bool, error)
 	GetPrompt(ctx context.Context, user User, id int) (Prompt, error)
 	SetPromptProcessing(ctx context.Context, user User, id int, prompt string) error
 	CompletePrompt(ctx context.Context, user User, id int, obj PromptComplete) error

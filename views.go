@@ -71,6 +71,7 @@ type PromptCreate struct {
 	Provider    string
 	Model       string
 	FileContent string
+	CreatedAt   time.Time
 }
 
 type PromptComplete struct {
@@ -140,4 +141,19 @@ type IssueUpdateView struct {
 type ProjectOptionView struct {
 	ID   int
 	Name string
+}
+
+type PromptListItem struct {
+	ID              string
+	ContextName     string
+	Status          PromptStatus
+	CreatedAt       time.Time
+	TotalIssues     int
+	SubmittedIssues int
+}
+
+type PromptListView struct {
+	Items      []PromptListItem
+	HasMore    bool
+	NextOffset int
 }

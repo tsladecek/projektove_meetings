@@ -206,6 +206,67 @@ func TestSubmitIssue_Submitted(t *testing.T) {
 	assert.Empty(t, p.created)
 }
 
+func TestControllerListPrompts(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	contextID := storeContext(t, repo, user, "c1")
+
+	olderID, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "older", Result: "r", ContextID: contextID, Status: PromptStatusError})
+	require.NoError(t, err)
+	newerID, err := repo.StorePrompt(t.Context(), user, PromptCreate{Prompt: "newer", Result: "r", ContextID: contextID, Status: PromptStatusDone})
+	require.NoError(t, err)
+
+	submitted := newIssueCreate(IssueParentPrompt, olderID)
+	submittedID, err := repo.StoreIssue(t.Context(), user, submitted)
+	require.NoError(t, err)
+	require.NotZero(t, submittedID)
+
+	projektoveID := 42
+	require.NoError(t, repo.UpdateIssue(t.Context(), user, IssueParentPrompt, olderID, submittedID, IssueUpdate{
+		Subject:      submitted.Subject,
+		Description:  submitted.Description,
+		ProjectID:    submitted.ProjectID,
+		StartDate:    submitted.StartDate,
+		DueDate:      submitted.DueDate,
+		AssignedToID: submitted.AssignedToID,
+		Status:       IssueStatusSubmitted,
+		ProjektoveID: &projektoveID,
+	}))
+
+	c := Controller{Repository: repo}
+
+	// first page with everything
+	view, err := c.ListPrompts(t.Context(), user, 20, 0)
+	require.NoError(t, err)
+	require.Len(t, view.Items, 2)
+	assert.False(t, view.HasMore)
+
+	// newest first
+	assert.Equal(t, strconv.Itoa(newerID), view.Items[0].ID)
+	assert.True(t, view.Items[0].CreatedAt.After(view.Items[1].CreatedAt))
+	assert.Equal(t, PromptStatusDone, view.Items[0].Status)
+
+	assert.Equal(t, strconv.Itoa(olderID), view.Items[1].ID)
+	assert.Equal(t, "c1", view.Items[1].ContextName)
+	assert.Equal(t, PromptStatusError, view.Items[1].Status)
+	assert.Equal(t, 1, view.Items[1].TotalIssues)
+	assert.Equal(t, 1, view.Items[1].SubmittedIssues)
+
+	// pagination: limit 1 -> newest only + HasMore, next offset points at the rest
+	page, err := c.ListPrompts(t.Context(), user, 1, 0)
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.True(t, page.HasMore)
+	assert.Equal(t, 1, page.NextOffset)
+	assert.Equal(t, strconv.Itoa(newerID), page.Items[0].ID)
+
+	rest, err := c.ListPrompts(t.Context(), user, 1, page.NextOffset)
+	require.NoError(t, err)
+	require.Len(t, rest.Items, 1)
+	assert.False(t, rest.HasMore)
+	assert.Equal(t, strconv.Itoa(olderID), rest.Items[0].ID)
+}
+
 func TestControllerCreatePrompt_EnqueuesTask(t *testing.T) {
 	repo, txp := newAppRepos(t)
 	storeUser(t, repo, "user@email.com")

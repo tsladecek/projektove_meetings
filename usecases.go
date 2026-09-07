@@ -279,6 +279,38 @@ func (c Controller) ListProjects(ctx context.Context, user User) ([]ProjectOptio
 	return views, nil
 }
 
+func (c Controller) ListPrompts(ctx context.Context, user User, limit, offset int) (PromptListView, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	prompts, hasMore, err := c.Repository.ListPrompts(ctx, user, limit, offset)
+	if err != nil {
+		return PromptListView{}, fmt.Errorf("when listing prompts: %w", err)
+	}
+
+	items := make([]PromptListItem, 0, len(prompts))
+	for _, p := range prompts {
+		items = append(items, PromptListItem{
+			ID:              p.ID,
+			ContextName:     p.Context.Name,
+			Status:          p.Status,
+			CreatedAt:       p.CreatedAt,
+			TotalIssues:     p.TotalIssues,
+			SubmittedIssues: p.SubmittedIssues,
+		})
+	}
+
+	return PromptListView{
+		Items:      items,
+		HasMore:    hasMore,
+		NextOffset: offset + len(items),
+	}, nil
+}
+
 func (c Controller) GetPrompt(ctx context.Context, user User, id int) (PromptView, error) {
 	prompt, err := c.Repository.GetPrompt(ctx, user, id)
 	if err != nil {

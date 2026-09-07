@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -147,9 +148,37 @@ func (a api) user() http.HandlerFunc {
 	}
 }
 
+const promptsPageSize = 20
+
 func (a api) prompts() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.components.Page(a.components.PageStub("Prompts", "Prompts list not implemented yet.")).Render(w)
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		offset := 0
+		if raw := r.URL.Query().Get("offset"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil {
+				WriteError(w, "invalid offset", http.StatusBadRequest, nil)
+				return
+			}
+			offset = parsed
+		}
+
+		view, err := a.controller.ListPrompts(r.Context(), user, promptsPageSize, offset)
+		if err != nil {
+			WriteError(w, "failed to load prompts", http.StatusInternalServerError, err)
+			return
+		}
+
+		if r.Header.Get("HX-Request") != "" {
+			a.components.PromptsBatch(view).Render(w)
+			return
+		}
+		a.components.Page(a.components.PromptsPage(view)).Render(w)
 	}
 }
 
@@ -619,11 +648,94 @@ func (c components) Sidebar() g.Node {
 	)
 }
 
-func (c components) PageStub(title, message string) g.Node {
+func (c components) PromptsPage(view PromptListView) g.Node {
 	return h.Div(
-		h.H1(h.Class("text-2xl font-bold mb-4"), g.Text(title)),
-		h.P(g.Text(message)),
+		h.H1(h.Class("text-2xl font-bold mb-4"), g.Text("Prompts")),
+		c.PromptsBatch(view),
 	)
+}
+
+func (c components) PromptsBatch(view PromptListView) g.Node {
+	if len(view.Items) == 0 {
+		return h.P(h.Class("text-gray-500"), g.Text("No prompts yet."))
+	}
+
+	rows := []g.Node{}
+	for _, it := range view.Items {
+		rows = append(rows, c.promptRow(it))
+	}
+
+	if view.HasMore {
+		rows = append(rows, c.loadMoreButton(view.NextOffset))
+	}
+
+	return h.Div(g.Group(rows))
+}
+
+func (c components) promptRow(it PromptListItem) g.Node {
+	path := strings.Replace(c.endpoints.prompt.Path(), "{id}", it.ID, 1)
+
+	statusText, statusClass := promptStatusDisplay(it.Status)
+
+	issues := g.Node(h.Span(h.Class("text-sm text-gray-500"), g.Text("")))
+	if it.TotalIssues > 0 {
+		if it.SubmittedIssues == it.TotalIssues {
+			issues = h.Span(
+				h.Class("flex items-center gap-1 text-sm text-green-700"),
+				solid.CheckCircle(h.Class("h-5 w-5 text-green-600")),
+				g.Text("All submitted"),
+			)
+		} else {
+			issues = h.Span(h.Class("text-sm text-gray-500"), g.Text(fmt.Sprintf("%d / %d submitted", it.SubmittedIssues, it.TotalIssues)))
+		}
+	}
+
+	return h.A(
+		h.Href(path),
+		h.Div(
+			h.Class("mb-2 border rounded px-3 py-2 flex items-center justify-between gap-4 hover:bg-gray-100"),
+			h.Div(
+				h.Class("block min-w-0"),
+				h.Div(h.Class("font-medium"), g.Text("Prompt #"+it.ID)),
+				h.Div(h.Class("text-sm text-gray-500 truncate"), g.Text(it.ContextName)),
+			),
+			h.Div(h.Class("text-sm text-gray-500 whitespace-nowrap"), g.Text(it.CreatedAt.Format("2006-01-02 15:04"))),
+			h.Span(
+				h.Class("whitespace-nowrap "+statusClass),
+				g.Text(statusText),
+			),
+			issues,
+		))
+}
+
+func (c components) loadMoreButton(offset int) g.Node {
+	path := c.endpoints.prompts.Path() + "?offset=" + strconv.Itoa(offset)
+	return c.button(
+		baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 disabled:bg-gray-400 disabled:hover:bg-gray-400",
+		htmx.Get(path),
+		htmx.Target("this"),
+		htmx.Swap("outerHTML"),
+		htmx.Indicator("#load-more-indicator"),
+		g.Text("Load more"),
+		h.Span(
+			h.ID("load-more-indicator"),
+			h.Class("htmx-indicator inline-flex items-center gap-1"),
+			solid.ArrowPath(h.Class("h-4 w-4 animate-spin")),
+		),
+	)
+}
+
+func promptStatusDisplay(status PromptStatus) (string, string) {
+	switch status {
+	case PromptStatusCreated, PromptStatusProcessing:
+		return "Processing", "text-amber-600"
+	case PromptStatusDone:
+		return "Done", "text-green-700"
+	case PromptStatusError:
+		return "Error", "text-red-700"
+	default:
+		return string(status), "text-gray-500"
+	}
 }
 
 func (c components) UserPage(profile UserProfileView) g.Node {

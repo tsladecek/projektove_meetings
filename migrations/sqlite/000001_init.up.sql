@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS prompts (
     provider TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
     file_content TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (context_id) REFERENCES contexts(id)
 );
