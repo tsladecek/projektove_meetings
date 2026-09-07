@@ -31,7 +31,7 @@ type api struct {
 	components components
 }
 
-func NewHandler(auth Auth, baseURL, cookieName string, controller Controller) http.Handler {
+func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, projektoveIssueEndpoint string) http.Handler {
 	m := http.NewServeMux()
 
 	burl, err := url.Parse(baseURL)
@@ -71,7 +71,7 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller) ht
 		submitIssue: endAPI(http.MethodPost, "/issues/{id}/submit"),
 	}
 
-	c := components{endpoints: e}
+	c := components{endpoints: e, projektoveIssueEndpoint: projektoveIssueEndpoint}
 	a := api{controller: controller, basePath: burl.Path, components: c}
 
 	type endpointHandler struct {
@@ -601,7 +601,8 @@ type endpoints struct {
 }
 
 type components struct {
-	endpoints endpoints
+	endpoints               endpoints
+	projektoveIssueEndpoint string
 }
 
 func (c components) Page(body g.Node) g.Node {
@@ -1006,9 +1007,9 @@ func (c components) IssueCard(iss IssueView, promptID string, projects []Project
 			solid.CheckCircle(h.Class("h-5 w-5 text-green-600")),
 			g.Text("Submitted"),
 		})
-		meta := ""
+		meta := h.Span()
 		if iss.ProjektoveID != nil {
-			meta = "Projektove #" + strconv.Itoa(*iss.ProjektoveID)
+			meta = h.A(h.Class("underline"), h.Target("_blank"), h.Href(fmt.Sprintf(c.projektoveIssueEndpoint, *iss.ProjektoveID)), g.Text("Projektove #"+strconv.Itoa(*iss.ProjektoveID)))
 		}
 		return h.Div(
 			h.ID(cardID),
@@ -1020,7 +1021,7 @@ func (c components) IssueCard(iss IssueView, promptID string, projects []Project
 			h.Div(
 				h.Class("flex items-center gap-2 text-green-700 text-sm"),
 				status,
-				g.Text(meta),
+				meta,
 			),
 		)
 	}
@@ -1101,6 +1102,7 @@ func (c components) IssueCard(iss IssueView, promptID string, projects []Project
 			c.SubmitButton(
 				h.Type("submit"),
 				g.Attr("data-submit-issue", ""),
+				htmx.Validate("true"),
 				htmx.Post(submitPath),
 				htmx.Include("closest form"),
 				htmx.Target("#"+cardID),

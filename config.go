@@ -34,8 +34,9 @@ type ConfigOIDC struct {
 }
 
 type ConfigProjektove struct {
-	URL   string          `toml:"url" env:"URL" env-required:"true"`
-	Users ProjektoveUsers `toml:"users" env:"USERS" env-required:"true"`
+	URL           string          `toml:"url" env:"URL" env-required:"true"`
+	Users         ProjektoveUsers `toml:"users" env:"USERS" env-required:"true"`
+	IssueEndpoint string          `toml:"issue_endpoint" env:"ISSUEENDPOINT env-required:"true"`
 }
 
 func NewConfig(configPath string) (Config, error) {
