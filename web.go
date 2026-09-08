@@ -63,10 +63,10 @@ type components struct {
 	endpoints               endpoints
 	projektoveIssueEndpoint string
 
-	endpointLogout string
+	endpointLogout Endpoint
 }
 
-func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssueEndpoint string) http.Handler {
+func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssueEndpoint string, logoutEndpoint Endpoint) http.Handler {
 	m := http.NewServeMux()
 
 	burl, err := url.Parse(baseURL)
@@ -111,7 +111,7 @@ func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssu
 		deleteIssue: endAPI(http.MethodDelete, "/issues/{id}"),
 	}
 
-	c := components{endpoints: e, projektoveIssueEndpoint: projektoveIssueEndpoint}
+	c := components{endpoints: e, projektoveIssueEndpoint: projektoveIssueEndpoint, endpointLogout: logoutEndpoint}
 	a := api{controller: controller, basePath: burl.Path, components: c}
 
 	type endpointHandler struct {
@@ -119,9 +119,10 @@ func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssu
 		handler  http.Handler
 	}
 
+	m.Handle(e.static.Pattern(), a.static())
+
 	for _, eh := range []endpointHandler{
 		{endpoint: e.root, handler: a.root()},
-		{endpoint: e.static, handler: a.static()},
 
 		// pages
 		{endpoint: e.user, handler: a.user()},
@@ -828,7 +829,7 @@ func (c components) Sidebar() g.Node {
 		h.Hr(h.Class("border-gray-700 my-2")),
 		h.Nav(h.Class("space-y-1 w-full"),
 			h.A(
-				h.Href(c.endpointLogout),
+				h.Href(c.endpointLogout.Path()),
 				h.Title("Logout"),
 				h.Class("flex items-center justify-center md:justify-start gap-3 w-full px-2 py-2 rounded hover:bg-gray-700"),
 				solid.ArrowRightOnRectangle(h.Class("h-5 w-5 shrink-0")),
@@ -882,7 +883,7 @@ func (c components) RootPage() g.Node {
 		h.Class("max-w-3xl space-y-8"),
 
 		h.Div(
-			h.H1(h.Class("text-2xl font-bold"), g.Text("Meetings to Issues")),
+			h.H1(h.Class("text-2xl font-bold"), g.Text("Meetings -> Projektove")),
 			h.P(
 				h.Class("text-gray-500 mt-1"),
 				g.Text("Turn meeting notes and CSV tables into Projektove issues. Review, edit and submit them in one place."),

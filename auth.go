@@ -288,25 +288,21 @@ func (a *AuthComposite) Authenticate(ctx context.Context, tokens *Tokens) (User,
 
 // AuthComposite combines optional OIDC auth with self-login (JWT session) auth.
 type AuthComposite struct {
-	oidc           *AuthOIDC
-	repo           Repository
-	secretKey      []byte
-	baseURL        string
-	loginEndpoint  string
-	logoutEndpoint string
+	oidc                 *AuthOIDC
+	repo                 Repository
+	secretKey            []byte
+	baseURL              string
+	loginEndpoint        Endpoint
+	authenticateEndpoint Endpoint
+	logoutEndpoint       Endpoint
 }
 
-func NewAuth(repo Repository, oidcConfig *ConfigOIDC, authConfig ConfigAuth, baseURLRaw string) (Auth, error) {
-	baseURL, err := url.Parse(baseURLRaw)
-	if err != nil {
-		return nil, fmt.Errorf("when constructing base url: %w", err)
-	}
-
-	loginURL, err := url.JoinPath(baseURL.String(), authConfig.EndpointLogin)
+func NewAuth(repo Repository, oidcConfig *ConfigOIDC, secretKey string, endpointLogin, endpointLogout Endpoint, baseURL *url.URL) (Auth, error) {
+	loginURL, err := url.JoinPath(baseURL.String(), endpointLogin.Path())
 	if err != nil {
 		return nil, fmt.Errorf("when constructing login url: %w", err)
 	}
-	_, err = url.JoinPath(baseURL.String(), authConfig.EndpointLogout)
+	_, err = url.JoinPath(baseURL.String(), endpointLogout.Path())
 	if err != nil {
 		return nil, fmt.Errorf("when constructing logout url: %w", err)
 	}
@@ -320,15 +316,16 @@ func NewAuth(repo Repository, oidcConfig *ConfigOIDC, authConfig ConfigAuth, bas
 		}
 	}
 
-	hmacKey := sha256.Sum256([]byte(authConfig.SecretKey))
+	hmacKey := sha256.Sum256([]byte(secretKey))
 
 	return &AuthComposite{
-		oidc:           oidcAuth,
-		repo:           repo,
-		secretKey:      hmacKey[:],
-		baseURL:        baseURL.String(),
-		loginEndpoint:  authConfig.EndpointLogin,
-		logoutEndpoint: authConfig.EndpointLogout,
+		oidc:                 oidcAuth,
+		repo:                 repo,
+		secretKey:            hmacKey[:],
+		baseURL:              baseURL.String(),
+		loginEndpoint:        endpointLogin,
+		logoutEndpoint:       endpointLogout,
+		authenticateEndpoint: NewEndpoint(http.MethodPost, baseURL.Path, endpointLogin.PathRaw()),
 	}, nil
 }
 
@@ -409,7 +406,7 @@ func (a *AuthComposite) Middleware(next http.Handler) http.Handler {
 			}
 			// Not authenticated — redirect to login
 			slog.Debug("No authentication found, redirecting to login")
-			http.Redirect(w, r, a.loginEndpoint, http.StatusFound)
+			http.Redirect(w, r, a.loginEndpoint.Path(), http.StatusFound)
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKeyUser, u)))
 	})
@@ -422,7 +419,7 @@ func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
 	}
 
 	// Self-login endpoint
-	m.HandleFunc(http.MethodGet+" "+a.loginEndpoint, func(w http.ResponseWriter, r *http.Request) {
+	m.HandleFunc(a.loginEndpoint.Pattern(), func(w http.ResponseWriter, r *http.Request) {
 		_, err := a.authenticate(w, r)
 		if err == nil {
 			http.Redirect(w, r, a.baseURL, http.StatusFound)
@@ -431,58 +428,72 @@ func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
 
 		page := co.HTML5(
 			co.HTML5Props{
-				Title: "login",
+				Title: "Sign in",
+				Head: []g.Node{
+					h.Link(h.Rel("stylesheet"), h.Href("/static/css/output.css")),
+				},
 				Body: []g.Node{
 					h.Div(
-						h.Form(
-							h.Method("post"),
-							h.Action(a.loginEndpoint),
-							h.Class("space-y-4"),
+						h.Class("min-h-screen flex items-center justify-center px-4"),
+						h.Div(
+							h.Class("w-full max-w-md"),
 							h.Div(
-								h.Label(h.Class("block text-sm font-medium"), g.Text("Email")),
-								h.Input(
-									h.Type("email"),
-									h.Name("email"),
-									h.Required(),
-									h.Class("w-full px-3 py-2 border rounded"),
-									h.Placeholder("you@example.com"),
-								),
+								h.Class("text-center mb-8"),
+								h.H1(h.Class("text-3xl font-bold text-gray-900"), g.Text("Meetings -> Projektove")),
+								h.P(h.Class("mt-2 text-sm text-gray-500"), g.Text("Sign in to your account to continue")),
 							),
 							h.Div(
-								h.Label(h.Class("block text-sm font-medium"), g.Text("Password")),
-								h.Input(
-									h.Type("password"),
-									h.Name("password"),
-									h.Required(),
-									h.Class("w-full px-3 py-2 border rounded"),
+								h.Class("bg-white shadow rounded-lg p-8"),
+								h.Form(
+									h.Method(a.authenticateEndpoint.method),
+									h.Action(a.authenticateEndpoint.Path()),
+									h.Class("space-y-6"),
+									h.Div(
+										h.Label(h.For("email"), h.Class("block text-sm font-medium text-gray-700 mb-1"), g.Text("Email")),
+										h.Input(
+											h.ID("email"),
+											h.Name("email"),
+											h.Type("email"),
+											h.Required(),
+											h.AutoComplete("email"),
+											h.Class("w-full px-3 py-2 border border-gray-300 rounded-md bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-transparent"),
+											h.Placeholder("you@example.com"),
+										),
+									),
+									h.Div(
+										h.Label(h.For("password"), h.Class("block text-sm font-medium text-gray-700 mb-1"), g.Text("Password")),
+										h.Input(
+											h.ID("password"),
+											h.Name("password"),
+											h.Type("password"),
+											h.Required(),
+											h.AutoComplete("current-password"),
+											h.Class("w-full px-3 py-2 border border-gray-300 rounded-md bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-transparent"),
+										),
+									),
+									h.Button(
+										h.Type("submit"),
+										h.Class("w-full rounded-md bg-gray-800 hover:bg-gray-900 text-white font-medium py-2 px-4 transition-colors cursor-pointer"),
+										g.Text("Sign in"),
+									),
 								),
+								g.Iff(a.oidc != nil, func() g.Node {
+									return g.Group([]g.Node{
+										h.Div(
+											h.Class("my-6 relative"),
+											h.Div(h.Class("absolute inset-0 flex items-center"), h.Div(h.Class("w-full border-t border-gray-200"))),
+											h.Div(h.Class("relative flex justify-center text-sm"), h.Span(h.Class("bg-white px-3 text-gray-500"), g.Text("or"))),
+										),
+										h.A(
+											h.Href(a.oidc.authCodeURL),
+											h.Class("w-full inline-flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium py-2 px-4 transition-colors cursor-pointer"),
+											g.Text("Sign in with SSO"),
+										),
+									})
+								}),
 							),
-							h.Button(
-								h.Type("submit"),
-								h.Class(baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 w-full"),
-								g.Text("Sign in"),
-							),
+							h.P(h.Class("mt-6 text-center text-xs text-gray-400"), g.Text("Meetings to Issues")),
 						),
-						g.Iff(a.oidc != nil, func() g.Node {
-							return g.Group([]g.Node{
-								h.Div(
-									h.Class("relative"),
-									h.Div(
-										h.Class("absolute inset-0 flex items-center"),
-										h.Div(h.Class("w-full border-t border-gray-300")),
-									),
-									h.Div(
-										h.Class("relative flex justify-center text-sm"),
-										h.Span(h.Class("bg-white px-2 text-gray-500"), g.Text("or")),
-									),
-								),
-								h.A(
-									h.Href(a.oidc.authCodeURL),
-									h.Class(baseButtonClass+"border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 px-4 py-2 w-full text-center"),
-									g.Text("Sign in with SSO"),
-								),
-							})
-						}),
 					),
 				},
 			},
@@ -491,7 +502,7 @@ func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
 		page.Render(w)
 	})
 
-	m.HandleFunc(http.MethodPost+" "+a.loginEndpoint, func(w http.ResponseWriter, r *http.Request) {
+	m.HandleFunc(a.authenticateEndpoint.Pattern(), func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			WriteError(w, "Invalid form submission", http.StatusBadRequest, err)
 			return
@@ -532,13 +543,13 @@ func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
 	})
 
 	// Self-login logout (clears session cookie)
-	m.HandleFunc(http.MethodGet+" "+a.logoutEndpoint, func(w http.ResponseWriter, r *http.Request) {
+	m.HandleFunc(a.logoutEndpoint.Pattern(), func(w http.ResponseWriter, r *http.Request) {
 		clearSessionCookie(w)
 		if a.oidc != nil {
 			a.oidc.logout(w, r)
 			return
 		}
-		http.Redirect(w, r, a.loginEndpoint, http.StatusFound)
+		http.Redirect(w, r, a.loginEndpoint.Path(), http.StatusFound)
 	})
 }
 

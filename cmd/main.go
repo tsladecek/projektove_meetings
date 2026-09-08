@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"time"
@@ -70,12 +71,20 @@ func run() error {
 		oidcConfig = &config.OIDC
 	}
 
-	auth, err := projektovemeeting.NewAuth(repo, oidcConfig, config.Auth, config.BaseURL)
+	baseURL, err := url.Parse(config.BaseURL)
+	if err != nil {
+		return fmt.Errorf("when parsing baseURL %q: %w", config.BaseURL, err)
+	}
+
+	endpointLogin := projektovemeeting.NewEndpoint(http.MethodGet, baseURL.Path, config.Auth.EndpointLogin)
+	endpointLogout := projektovemeeting.NewEndpoint(http.MethodGet, baseURL.Path, config.Auth.EndpointLogout)
+
+	auth, err := projektovemeeting.NewAuth(repo, oidcConfig, config.Auth.SecretKey, endpointLogin, endpointLogout, baseURL)
 	if err != nil {
 		return fmt.Errorf("when constructing auth adapter: %w", err)
 	}
 
-	handler := projektovemeeting.NewHandler(auth, "/", controller, config.Projektove.IssueEndpoint)
+	handler := projektovemeeting.NewHandler(auth, "/", controller, config.Projektove.IssueEndpoint, endpointLogout)
 
 	server := http.Server{Addr: fmt.Sprintf(":%d", config.Port), Handler: handler}
 

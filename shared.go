@@ -44,6 +44,9 @@ func (e Endpoint) PathRaw() string {
 }
 
 func NewEndpoint(method, base, path string) Endpoint {
+	if base == "" {
+		base = "/"
+	}
 	p, err := url.JoinPath(base, path)
 	if err != nil {
 		panic(err)
