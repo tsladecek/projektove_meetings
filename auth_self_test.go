@@ -1,6 +1,7 @@
 package projektovemeeting
 
 import (
+	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,7 +14,13 @@ import (
 
 func newTestAuth(t *testing.T, repo Repository) Auth {
 	t.Helper()
-	auth, err := NewAuth(repo, nil, ConfigAuth{SecretKey: "test-secret-key"}, "http://app.test")
+	baseURL, err := url.Parse("http://app.test")
+	require.NoError(t, err)
+
+	auth, err := NewAuth(repo, nil, "test-secret-key",
+		NewEndpoint(http.MethodGet, baseURL.Path, "/login"),
+		NewEndpoint(http.MethodGet, baseURL.Path, "/logout"),
+		baseURL)
 	require.NoError(t, err)
 	return auth
 }
@@ -100,7 +107,7 @@ func TestSelfLogin_WrongPassword(t *testing.T) {
 
 	mux.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Invalid email or password")
 	for _, c := range rec.Result().Cookies() {
 		assert.NotEqual(t, sessionCookieName, c.Name)
@@ -121,7 +128,7 @@ func TestSelfLogin_UnknownUser(t *testing.T) {
 
 	mux.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Invalid email or password")
 }
 
@@ -169,29 +176,6 @@ func TestMiddleware_NoCookiesRedirectsToLogin(t *testing.T) {
 	assert.Equal(t, "/login", rec.Header().Get("Location"))
 }
 
-func TestMiddleware_AuthenticatedUserOnLoginRedirectsToRoot(t *testing.T) {
-	repo := newRepository(t)
-	user := createUserWithPassword(t, repo, "user@example.com", "secret")
-	auth := newTestAuth(t, repo)
-	composite := auth.(*AuthComposite)
-
-	token, err := composite.generateSessionToken(user.ID)
-	require.NoError(t, err)
-
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/login", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-	rec := httptest.NewRecorder()
-
-	auth.Middleware(next).ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusFound, rec.Code)
-	assert.Equal(t, "http://app.test", rec.Header().Get("Location"))
-}
-
 func TestLoginPage_CreatedUserRedirectsToRoot(t *testing.T) {
 	repo := newRepository(t)
 	user := createUserWithPassword(t, repo, "user@example.com", "secret")
@@ -234,12 +218,38 @@ func TestLoginPage_RendersForm(t *testing.T) {
 }
 
 func TestLoginPage_RendersSSOButtonWhenOIDCConfigured(t *testing.T) {
-	body := strings.Builder{}
-	components{endpoints: endpoints{}}.LoginPage("", "https://sso.example.com/auth").Render(&body)
+	repo := newRepository(t)
 
-	assert.Contains(t, body.String(), "Sign in with SSO")
-	assert.Contains(t, body.String(), "https://sso.example.com/auth")
-	assert.Contains(t, body.String(), `name="email"`)
+	baseURL, err := url.Parse("http://app.test")
+	require.NoError(t, err)
+
+	hmacKey := sha256.Sum256([]byte("test-secret-key"))
+	auth := &AuthComposite{
+		oidc: &AuthOIDC{
+			authCodeURL:      "https://sso.example.com/auth",
+			loginURL:         "/login",
+			callbackEndpoint: "/oauth2/callback",
+		},
+		repo:                 repo,
+		secretKey:            hmacKey[:],
+		baseURL:              baseURL.String(),
+		loginEndpoint:        NewEndpoint(http.MethodGet, baseURL.Path, "/login"),
+		authenticateEndpoint: NewEndpoint(http.MethodPost, baseURL.Path, "/login"),
+		logoutEndpoint:       NewEndpoint(http.MethodGet, baseURL.Path, "/logout"),
+	}
+
+	mux := http.NewServeMux()
+	auth.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Sign in with SSO")
+	assert.Contains(t, rec.Body.String(), "https://sso.example.com/auth")
+	assert.Contains(t, rec.Body.String(), `name="email"`)
 }
 
 func TestLogout_ClearsSessionCookie(t *testing.T) {

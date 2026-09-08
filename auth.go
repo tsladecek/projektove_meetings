@@ -273,9 +273,6 @@ func (a *AuthComposite) Authenticate(ctx context.Context, tokens *Tokens) (User,
 	if tokens.ID == "" {
 		return User{}, fmt.Errorf("id token is empty")
 	}
-	if tokens.Refresh == "" {
-		return User{}, fmt.Errorf("refresh token is empty")
-	}
 
 	user, err := a.oidc.authenticate(ctx, tokens)
 	if err != nil {
@@ -366,7 +363,7 @@ func (a *AuthComposite) validateSessionToken(ctx context.Context, tokenStr strin
 	return user, nil
 }
 
-func (a *AuthComposite) authenticate(w http.ResponseWriter, r *http.Request) (User, error) {
+func (a *AuthComposite) authenticate(w http.ResponseWriter, r *http.Request) (User, Tokens, error) {
 	tokens := Tokens{}
 
 	// Check self-login session cookie first
@@ -389,24 +386,28 @@ func (a *AuthComposite) authenticate(w http.ResponseWriter, r *http.Request) (Us
 
 	user, err := a.Authenticate(r.Context(), &tokens)
 	if err != nil {
-		return User{}, fmt.Errorf("not authenticated")
+		return User{}, tokens, fmt.Errorf("not authenticated")
 	}
 
-	return user, nil
+	return user, tokens, nil
 }
 
 func (a *AuthComposite) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, err := a.authenticate(w, r)
+		u, tokens, err := a.authenticate(w, r)
 		if err != nil {
 			clearSessionCookie(w)
-			if a.oidc != nil {
+			if a.oidc != nil && tokens.ID != "" {
 				a.oidc.logout(w, r)
 				return
 			}
 			// Not authenticated — redirect to login
 			slog.Debug("No authentication found, redirecting to login")
 			http.Redirect(w, r, a.loginEndpoint.Path(), http.StatusFound)
+			return
+		}
+		if a.oidc != nil {
+			a.oidc.setCookies(w, tokens)
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKeyUser, u)))
 	})
@@ -420,7 +421,7 @@ func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
 
 	// Self-login endpoint
 	m.HandleFunc(a.loginEndpoint.Pattern(), func(w http.ResponseWriter, r *http.Request) {
-		_, err := a.authenticate(w, r)
+		_, _, err := a.authenticate(w, r)
 		if err == nil {
 			http.Redirect(w, r, a.baseURL, http.StatusFound)
 			return
