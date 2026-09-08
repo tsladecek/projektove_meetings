@@ -793,6 +793,7 @@ type navLink struct {
 func (c components) Sidebar() g.Node {
 	groups := [][]navLink{
 		{
+			{label: "Home", href: c.endpoints.root.Path(), icon: solid.Home(h.Class("h-5 w-5 shrink-0"))},
 			{label: "User", href: c.endpoints.user.Path(), icon: solid.User(h.Class("h-5 w-5 shrink-0"))},
 		},
 		{
