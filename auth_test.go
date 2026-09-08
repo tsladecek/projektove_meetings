@@ -252,7 +252,7 @@ func TestMiddlewareAuth_ValidCookie(t *testing.T) {
 }
 
 func TestMiddlewareAuth_MissingCookie(t *testing.T) {
-	auth := AuthOIDC{loginURL: "/login"}
+	auth := AuthOIDC{authCodeURL: "/login"}
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -269,7 +269,7 @@ func TestMiddlewareAuth_MissingCookie(t *testing.T) {
 func TestMiddlewareAuth_InvalidToken(t *testing.T) {
 	repo := newRepository(t)
 	verifier, _ := authVerifier(t, testClientID)
-	auth := AuthOIDC{repo: repo, verifier: verifier, idTokenCookieName: "token", refreshCookieName: "refresh", loginURL: "/login"}
+	auth := AuthOIDC{repo: repo, verifier: verifier, idTokenCookieName: "token", refreshCookieName: "refresh", authCodeURL: "/login"}
 
 	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
 	req.AddCookie(&http.Cookie{Name: "token", Value: "garbage"})
@@ -292,7 +292,7 @@ func authOIDCWithTokenEndpoint(t *testing.T, repo Repository) AuthOIDC {
 		verifier:          verifier,
 		idTokenCookieName: "token",
 		refreshCookieName: "refresh",
-		loginURL:          "/login",
+		authCodeURL:       "/login",
 		oauth2Config: oauth2.Config{
 			ClientID:     testClientID,
 			ClientSecret: "secret",
@@ -399,7 +399,7 @@ func TestCallback_SetsRefreshCookie(t *testing.T) {
 		idTokenCookieName: "token",
 		refreshCookieName: "refresh",
 		callbackEndpoint:  "/oauth2/callback",
-		logoutEndoint:     "/oauth2/logout",
+		endSessionURL:     "/oauth2/logout",
 		baseURL:           "http://app.test",
 		oauth2Config: oauth2.Config{
 			ClientID:     testClientID,

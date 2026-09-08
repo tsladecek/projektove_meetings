@@ -54,8 +54,16 @@ type Repository interface {
 	UpsertDefaultUser(ctx context.Context, email, passwordHash string) error
 }
 
+type Tokens struct {
+	// oidc
+	ID      string
+	Refresh string
+	// self
+	Session string
+}
+
 type Auth interface {
-	Authenticate(ctx context.Context, idToken, refreshToken string) (User, AuthTokenResult, error)
+	Authenticate(ctx context.Context, token *Tokens) (User, error)
 	RegisterRoutes(m *http.ServeMux)
 	Middleware(next http.Handler) http.Handler
 }

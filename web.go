@@ -31,6 +31,41 @@ type api struct {
 	components components
 }
 
+type endpoints struct {
+	root   Endpoint
+	static Endpoint
+
+	// pages
+	user      Endpoint
+	prompts   Endpoint
+	newPrompt Endpoint
+	prompt    Endpoint
+	batches   Endpoint
+	newBatch  Endpoint
+	batch     Endpoint
+
+	// api - should have /api prefix
+	updateUser    Endpoint
+	addContext    Endpoint
+	deleteContext Endpoint
+	addLLMModel   Endpoint
+
+	listContexts Endpoint
+	createPrompt Endpoint
+	createBatch  Endpoint
+
+	updateIssue Endpoint
+	submitIssue Endpoint
+	deleteIssue Endpoint
+}
+
+type components struct {
+	endpoints               endpoints
+	projektoveIssueEndpoint string
+
+	endpointLogout string
+}
+
 func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssueEndpoint string) http.Handler {
 	m := http.NewServeMux()
 
@@ -718,39 +753,6 @@ func (a api) deleteIssue() http.HandlerFunc {
 	}
 }
 
-type endpoints struct {
-	root   Endpoint
-	static Endpoint
-
-	// pages
-	user      Endpoint
-	prompts   Endpoint
-	newPrompt Endpoint
-	prompt    Endpoint
-	batches   Endpoint
-	newBatch  Endpoint
-	batch     Endpoint
-
-	// api - should have /api prefix
-	updateUser    Endpoint
-	addContext    Endpoint
-	deleteContext Endpoint
-	addLLMModel   Endpoint
-
-	listContexts Endpoint
-	createPrompt Endpoint
-	createBatch  Endpoint
-
-	updateIssue Endpoint
-	submitIssue Endpoint
-	deleteIssue Endpoint
-}
-
-type components struct {
-	endpoints               endpoints
-	projektoveIssueEndpoint string
-}
-
 func (c components) Page(body g.Node) g.Node {
 	return co.HTML5(
 		co.HTML5Props{
@@ -826,7 +828,7 @@ func (c components) Sidebar() g.Node {
 		h.Hr(h.Class("border-gray-700 my-2")),
 		h.Nav(h.Class("space-y-1 w-full"),
 			h.A(
-				h.Href("/logout"),
+				h.Href(c.endpointLogout),
 				h.Title("Logout"),
 				h.Class("flex items-center justify-center md:justify-start gap-3 w-full px-2 py-2 rounded hover:bg-gray-700"),
 				solid.ArrowRightOnRectangle(h.Class("h-5 w-5 shrink-0")),
@@ -924,94 +926,6 @@ func (c components) RootPage() g.Node {
 			g.Text(" on the User page."),
 		),
 	)
-}
-
-func (c components) LoginPage(errorMsg string, oidcLoginURL string) g.Node {
-	nodes := []g.Node{
-		h.Div(
-			h.Class("flex items-center justify-center min-h-screen"),
-			h.Div(
-				h.Class("w-full max-w-sm space-y-6"),
-				h.Div(
-					h.Class("text-center"),
-					h.H1(h.Class("text-2xl font-bold"), g.Text("Sign in")),
-					h.P(h.Class("text-sm text-gray-500 mt-1"), g.Text("Sign in to access Meetings to Issues")),
-				),
-			),
-		),
-	}
-
-	formNodes := []g.Node{}
-	if errorMsg != "" {
-		formNodes = append(formNodes,
-			h.Div(
-				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3 text-sm"),
-				g.Text(errorMsg),
-			),
-		)
-	}
-
-	formNodes = append(formNodes,
-		h.Form(
-			h.Method("post"),
-			h.Action("/login"),
-			h.Class("space-y-4"),
-			h.Div(
-				h.Label(h.Class("block text-sm font-medium"), g.Text("Email")),
-				h.Input(
-					h.Type("email"),
-					h.Name("email"),
-					h.Required(),
-					h.Class("w-full px-3 py-2 border rounded"),
-					h.Placeholder("you@example.com"),
-				),
-			),
-			h.Div(
-				h.Label(h.Class("block text-sm font-medium"), g.Text("Password")),
-				h.Input(
-					h.Type("password"),
-					h.Name("password"),
-					h.Required(),
-					h.Class("w-full px-3 py-2 border rounded"),
-				),
-			),
-			h.Button(
-				h.Type("submit"),
-				h.Class(baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 w-full"),
-				g.Text("Sign in"),
-			),
-		),
-	)
-
-	if oidcLoginURL != "" {
-		formNodes = append(formNodes,
-			h.Div(
-				h.Class("relative"),
-				h.Div(
-					h.Class("absolute inset-0 flex items-center"),
-					h.Div(h.Class("w-full border-t border-gray-300")),
-				),
-				h.Div(
-					h.Class("relative flex justify-center text-sm"),
-					h.Span(h.Class("bg-white px-2 text-gray-500"), g.Text("or")),
-				),
-			),
-			h.A(
-				h.Href(oidcLoginURL),
-				h.Class(baseButtonClass+"border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 px-4 py-2 w-full text-center"),
-				g.Text("Sign in with SSO"),
-			),
-		)
-	}
-
-	nodes = append(nodes,
-		h.Div(
-			h.Class("w-full max-w-sm space-y-6"),
-			h.Div(g.Group(formNodes)),
-		),
-	)
-
-	return h.Div(g.Group(nodes))
 }
 
 func (c components) PromptsPage(view PromptListView) g.Node {
@@ -1379,7 +1293,7 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 	if view.Status.IsPending() {
 		return h.Div(
 			h.ID("prompt-view"),
-			htmx.Get("/prompts/"+view.ID),
+			htmx.Get(strings.Replace(c.endpoints.prompt.Path(), "{id}", view.ID, 1)),
 			htmx.Trigger("every 5s"),
 			htmx.Swap("outerHTML"),
 			h.Class("space-y-6 max-w-3xl"),

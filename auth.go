@@ -15,6 +15,10 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
+
+	g "maragu.dev/gomponents"
+	co "maragu.dev/gomponents/components"
+	h "maragu.dev/gomponents/html"
 )
 
 const sessionCookieName = "session_token"
@@ -29,23 +33,20 @@ type AuthOIDC struct {
 	issuer            string
 
 	callbackEndpoint string
-	logoutEndoint    string
+	endSessionURL    string
 	oauth2Config     oauth2.Config
-	loginURL         string
+	authCodeURL      string
+
+	loginURL string
 }
 
-func NewAuthOIDC(repo Repository, config ConfigOIDC, baseURLRaw string) (*AuthOIDC, error) {
+func NewAuthOIDC(repo Repository, config ConfigOIDC, baseURL, loginURL string) (*AuthOIDC, error) {
 	provider, err := oidc.NewProvider(context.Background(), config.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("when discovering oidc provider %q: %w", config.Issuer, err)
 	}
 
-	baseURL, err := url.Parse(baseURLRaw)
-	if err != nil {
-		return nil, fmt.Errorf("when parsing base url %q: %w", baseURLRaw, err)
-	}
-
-	callbackURL, err := url.JoinPath(baseURL.String(), config.CallbackEndpoint)
+	callbackURL, err := url.JoinPath(baseURL, config.CallbackEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("when parsing callback url %q: %w", config.CallbackEndpoint, err)
 	}
@@ -71,10 +72,11 @@ func NewAuthOIDC(repo Repository, config ConfigOIDC, baseURLRaw string) (*AuthOI
 		refreshCookieName: refreshTokenCookieName,
 		callbackEndpoint:  config.CallbackEndpoint,
 		oauth2Config:      oauth2Config,
-		loginURL:          oauth2Config.AuthCodeURL(""),
-		baseURL:           baseURL.String(),
-		logoutEndoint:     config.LogoutEndpoint,
+		authCodeURL:       oauth2Config.AuthCodeURL(""),
+		baseURL:           baseURL,
+		endSessionURL:     config.EndSessionURL,
 		issuer:            config.Issuer,
+		loginURL:          loginURL,
 	}, nil
 }
 
@@ -82,33 +84,31 @@ type oidcClaims struct {
 	Email string `json:"email"`
 }
 
-type AuthTokenResult struct {
-	IDToken      string
-	RefreshToken string
-}
-
-func (a AuthOIDC) Authenticate(ctx context.Context, idToken, refreshToken string) (User, AuthTokenResult, error) {
-	user, err := a.authenticateWithIDToken(ctx, idToken)
+func (a AuthOIDC) authenticate(ctx context.Context, tokens *Tokens) (User, error) {
+	user, err := a.authenticateWithIDToken(ctx, tokens.ID)
 	if err == nil {
-		return user, AuthTokenResult{}, nil
+		return user, nil
 	}
 
-	if refreshToken == "" {
-		return User{}, AuthTokenResult{}, err
+	if tokens.Refresh == "" {
+		return User{}, err
 	}
 
-	refreshedIDToken, rotatedRefreshToken, refreshErr := a.refresh(ctx, refreshToken)
+	refreshedIDToken, rotatedRefreshToken, refreshErr := a.refresh(ctx, tokens.Refresh)
 	if refreshErr != nil {
 		slog.Debug("Token refresh failed", "error", refreshErr.Error())
-		return User{}, AuthTokenResult{}, fmt.Errorf("when refreshing session (id token verification failed: %v): %w", err, refreshErr)
+		return User{}, fmt.Errorf("when refreshing session (id token verification failed: %v): %w", err, refreshErr)
 	}
 
 	user, err = a.authenticateWithIDToken(ctx, refreshedIDToken)
 	if err != nil {
-		return User{}, AuthTokenResult{}, err
+		return User{}, err
 	}
 
-	return user, AuthTokenResult{IDToken: refreshedIDToken, RefreshToken: rotatedRefreshToken}, nil
+	tokens.ID = refreshedIDToken
+	tokens.Refresh = rotatedRefreshToken
+
+	return user, nil
 }
 
 func (a AuthOIDC) authenticateWithIDToken(ctx context.Context, token string) (User, error) {
@@ -212,20 +212,20 @@ func (a AuthOIDC) RegisterRoutes(m *http.ServeMux) {
 		slog.Debug("Authentication Successful")
 		http.Redirect(w, r, a.baseURL, http.StatusFound)
 	})
+}
 
-	m.HandleFunc(http.MethodGet+" "+a.logoutEndoint, func(w http.ResponseWriter, r *http.Request) {
-		idTokenHint := ""
-		idTokenCookie, err := r.Cookie(a.idTokenCookieName)
-		if err != nil {
-			slog.Error("No ID Token Found during logout")
-			http.Redirect(w, r, a.baseURL, http.StatusFound)
-			return
-		}
+func (a AuthOIDC) logout(w http.ResponseWriter, r *http.Request) {
+	idTokenHint := ""
+	idTokenCookie, err := r.Cookie(a.idTokenCookieName)
+	if err != nil {
+		slog.Error("No ID Token Found during logout")
+		http.Redirect(w, r, a.loginURL, http.StatusFound)
+		return
+	}
 
-		idTokenHint = idTokenCookie.Value
-		a.clearCookies(w)
-		http.Redirect(w, r, fmt.Sprintf("%s/protocol/openid-connect/logout?id_token_hint=%s&post_logout_redirect_uri=%s", a.issuer, idTokenHint, url.QueryEscape(a.loginURL)), http.StatusFound)
-	})
+	idTokenHint = idTokenCookie.Value
+	a.clearCookies(w)
+	http.Redirect(w, r, fmt.Sprintf("%s?id_token_hint=%s&post_logout_redirect_uri=%s", a.endSessionURL, idTokenHint, url.QueryEscape(a.loginURL)), http.StatusFound)
 }
 
 func setAuthCookie(w http.ResponseWriter, name, value string) {
@@ -243,16 +243,12 @@ func (a AuthOIDC) clearCookies(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: a.refreshCookieName, Path: "/", Value: "", MaxAge: -1, HttpOnly: true, Secure: true})
 }
 
-func (a AuthOIDC) authenticate(ctx context.Context, idToken, refreshToken string) (User, AuthTokenResult, error) {
-	return a.Authenticate(ctx, idToken, refreshToken)
-}
-
-func (a AuthOIDC) setCookies(w http.ResponseWriter, result AuthTokenResult) {
-	if result.IDToken != "" {
-		setAuthCookie(w, a.idTokenCookieName, result.IDToken)
+func (a AuthOIDC) setCookies(w http.ResponseWriter, result Tokens) {
+	if result.ID != "" {
+		setAuthCookie(w, a.idTokenCookieName, result.ID)
 	}
-	if result.RefreshToken != "" {
-		setAuthCookie(w, a.refreshCookieName, result.RefreshToken)
+	if result.Refresh != "" {
+		setAuthCookie(w, a.refreshCookieName, result.Refresh)
 	}
 }
 
@@ -260,67 +256,65 @@ func (a AuthOIDC) clearAllCookies(w http.ResponseWriter) {
 	a.clearCookies(w)
 }
 
-func (a AuthOIDC) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		idTokenCookie, idErr := r.Cookie(a.idTokenCookieName)
-		refreshCookie, refreshErr := r.Cookie(a.refreshCookieName)
-		if idErr != nil && refreshErr != nil {
-			slog.Debug("No authentication cookies found")
-			http.Redirect(w, r, a.loginURL, http.StatusFound)
-			return
-		}
-
-		idToken := ""
-		if idErr == nil {
-			idToken = idTokenCookie.Value
-		}
-		refreshToken := ""
-		if refreshErr == nil {
-			refreshToken = refreshCookie.Value
-		}
-
-		user, result, err := a.Authenticate(r.Context(), idToken, refreshToken)
+func (a *AuthComposite) Authenticate(ctx context.Context, tokens *Tokens) (User, error) {
+	if tokens.Session != "" {
+		user, err := a.validateSessionToken(ctx, tokens.Session)
 		if err != nil {
-			slog.Debug("Authentication failed", "error", err.Error())
-			a.clearCookies(w)
-			http.Redirect(w, r, a.loginURL, http.StatusFound)
-			return
+			return User{}, fmt.Errorf("when validating session token: %w", err)
 		}
 
-		if result.IDToken != "" {
-			setAuthCookie(w, a.idTokenCookieName, result.IDToken)
-		}
-		if result.RefreshToken != "" {
-			setAuthCookie(w, a.refreshCookieName, result.RefreshToken)
-		}
-
-		slog.Debug("Authentication successful")
-
-		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
-	})
-}
-
-func (a *AuthComposite) Authenticate(ctx context.Context, idToken, refreshToken string) (User, AuthTokenResult, error) {
-	if a.oidc == nil {
-		return User{}, AuthTokenResult{}, errors.New("oidc authentication is not configured")
+		return user, nil
 	}
-	return a.oidc.Authenticate(ctx, idToken, refreshToken)
+
+	if a.oidc == nil {
+		return User{}, fmt.Errorf("oidc not configured")
+	}
+
+	if tokens.ID == "" {
+		return User{}, fmt.Errorf("id token is empty")
+	}
+	if tokens.Refresh == "" {
+		return User{}, fmt.Errorf("refresh token is empty")
+	}
+
+	user, err := a.oidc.authenticate(ctx, tokens)
+	if err != nil {
+		return User{}, fmt.Errorf("when validating session token: %w", err)
+	}
+
+	return user, nil
+
 }
 
 // AuthComposite combines optional OIDC auth with self-login (JWT session) auth.
 type AuthComposite struct {
-	oidc          *AuthOIDC
-	repo          Repository
-	secretKey     []byte
-	baseURL       string
-	loginEndpoint string
+	oidc           *AuthOIDC
+	repo           Repository
+	secretKey      []byte
+	baseURL        string
+	loginEndpoint  string
+	logoutEndpoint string
 }
 
-func NewAuth(repo Repository, oidcConfig *ConfigOIDC, authConfig ConfigAuth, baseURL string) (Auth, error) {
+func NewAuth(repo Repository, oidcConfig *ConfigOIDC, authConfig ConfigAuth, baseURLRaw string) (Auth, error) {
+	baseURL, err := url.Parse(baseURLRaw)
+	if err != nil {
+		return nil, fmt.Errorf("when constructing base url: %w", err)
+	}
+
+	loginURL, err := url.JoinPath(baseURL.String(), authConfig.EndpointLogin)
+	if err != nil {
+		return nil, fmt.Errorf("when constructing login url: %w", err)
+	}
+	_, err = url.JoinPath(baseURL.String(), authConfig.EndpointLogout)
+	if err != nil {
+		return nil, fmt.Errorf("when constructing logout url: %w", err)
+	}
+
 	var oidcAuth *AuthOIDC
 	if oidcConfig != nil && oidcConfig.Issuer != "" {
 		var err error
-		oidcAuth, err = NewAuthOIDC(repo, *oidcConfig, baseURL)
+		oidcAuth, err = NewAuthOIDC(repo, *oidcConfig, baseURL.String(), loginURL)
 		if err != nil {
 			return nil, fmt.Errorf("when constructing OIDC auth: %w", err)
 		}
@@ -329,11 +323,12 @@ func NewAuth(repo Repository, oidcConfig *ConfigOIDC, authConfig ConfigAuth, bas
 	hmacKey := sha256.Sum256([]byte(authConfig.SecretKey))
 
 	return &AuthComposite{
-		oidc:          oidcAuth,
-		repo:          repo,
-		secretKey:     hmacKey[:],
-		baseURL:       baseURL,
-		loginEndpoint: "/login",
+		oidc:           oidcAuth,
+		repo:           repo,
+		secretKey:      hmacKey[:],
+		baseURL:        baseURL.String(),
+		loginEndpoint:  authConfig.EndpointLogin,
+		logoutEndpoint: authConfig.EndpointLogout,
 	}, nil
 }
 
@@ -374,59 +369,49 @@ func (a *AuthComposite) validateSessionToken(ctx context.Context, tokenStr strin
 	return user, nil
 }
 
+func (a *AuthComposite) authenticate(w http.ResponseWriter, r *http.Request) (User, error) {
+	tokens := Tokens{}
+
+	// Check self-login session cookie first
+	if sessionCookie, err := r.Cookie(sessionCookieName); err == nil {
+		tokens.Session = sessionCookie.Value
+	}
+
+	// Check OIDC cookies if configured
+	if a.oidc != nil {
+		idTokenCookie, err := r.Cookie(a.oidc.idTokenCookieName)
+		if err == nil {
+			tokens.ID = idTokenCookie.Value
+		}
+
+		refreshCookie, err := r.Cookie(a.oidc.refreshCookieName)
+		if err == nil {
+			tokens.Refresh = refreshCookie.Value
+		}
+	}
+
+	user, err := a.Authenticate(r.Context(), &tokens)
+	if err != nil {
+		return User{}, fmt.Errorf("not authenticated")
+	}
+
+	return user, nil
+}
+
 func (a *AuthComposite) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-
-		// Check self-login session cookie first
-		if sessionCookie, err := r.Cookie(sessionCookieName); err == nil {
-			user, err := a.validateSessionToken(r.Context(), sessionCookie.Value)
-			if err == nil {
-				// Authenticated via self-login
-				if path == a.loginEndpoint {
-					http.Redirect(w, r, a.baseURL, http.StatusFound)
-					return
-				}
-				next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
+		u, err := a.authenticate(w, r)
+		if err != nil {
+			clearSessionCookie(w)
+			if a.oidc != nil {
+				a.oidc.logout(w, r)
 				return
 			}
-			// Invalid session cookie — clear it
-			clearSessionCookie(w)
+			// Not authenticated — redirect to login
+			slog.Debug("No authentication found, redirecting to login")
+			http.Redirect(w, r, a.loginEndpoint, http.StatusFound)
 		}
-
-		// Check OIDC cookies if configured
-		if a.oidc != nil {
-			idTokenCookie, idErr := r.Cookie(a.oidc.idTokenCookieName)
-			refreshCookie, refreshErr := r.Cookie(a.oidc.refreshCookieName)
-			if idErr == nil || refreshErr == nil {
-				idToken := ""
-				if idErr == nil {
-					idToken = idTokenCookie.Value
-				}
-				refreshToken := ""
-				if refreshErr == nil {
-					refreshToken = refreshCookie.Value
-				}
-
-				user, result, err := a.oidc.authenticate(r.Context(), idToken, refreshToken)
-				if err == nil {
-					// Authenticated via OIDC
-					if path == a.loginEndpoint {
-						http.Redirect(w, r, a.baseURL, http.StatusFound)
-						return
-					}
-					a.oidc.setCookies(w, result)
-					next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
-					return
-				}
-				// Invalid OIDC tokens — clear them
-				a.oidc.clearAllCookies(w)
-			}
-		}
-
-		// Not authenticated — redirect to login
-		slog.Debug("No authentication found, redirecting to login")
-		http.Redirect(w, r, a.loginEndpoint, http.StatusFound)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKeyUser, u)))
 	})
 }
 
@@ -438,47 +423,77 @@ func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
 
 	// Self-login endpoint
 	m.HandleFunc(http.MethodGet+" "+a.loginEndpoint, func(w http.ResponseWriter, r *http.Request) {
-		// If already authenticated (either method), redirect to root
-		if sessionCookie, err := r.Cookie(sessionCookieName); err == nil {
-			if _, err := a.validateSessionToken(r.Context(), sessionCookie.Value); err == nil {
-				http.Redirect(w, r, a.baseURL, http.StatusFound)
-				return
-			}
-		}
-		if a.oidc != nil {
-			idTokenCookie, idErr := r.Cookie(a.oidc.idTokenCookieName)
-			refreshCookie, refreshErr := r.Cookie(a.oidc.refreshCookieName)
-			if idErr == nil || refreshErr == nil {
-				idToken := ""
-				if idErr == nil {
-					idToken = idTokenCookie.Value
-				}
-				refreshToken := ""
-				if refreshErr == nil {
-					refreshToken = refreshCookie.Value
-				}
-				if _, _, err := a.oidc.authenticate(r.Context(), idToken, refreshToken); err == nil {
-					http.Redirect(w, r, a.baseURL, http.StatusFound)
-					return
-				}
-			}
+		_, err := a.authenticate(w, r)
+		if err == nil {
+			http.Redirect(w, r, a.baseURL, http.StatusFound)
+			return
 		}
 
-		oidcLoginURL := ""
-		if a.oidc != nil {
-			oidcLoginURL = a.oidc.loginURL
-		}
-		components{endpoints: endpoints{}}.LoginPage("", oidcLoginURL).Render(w)
+		page := co.HTML5(
+			co.HTML5Props{
+				Title: "login",
+				Body: []g.Node{
+					h.Div(
+						h.Form(
+							h.Method("post"),
+							h.Action(a.loginEndpoint),
+							h.Class("space-y-4"),
+							h.Div(
+								h.Label(h.Class("block text-sm font-medium"), g.Text("Email")),
+								h.Input(
+									h.Type("email"),
+									h.Name("email"),
+									h.Required(),
+									h.Class("w-full px-3 py-2 border rounded"),
+									h.Placeholder("you@example.com"),
+								),
+							),
+							h.Div(
+								h.Label(h.Class("block text-sm font-medium"), g.Text("Password")),
+								h.Input(
+									h.Type("password"),
+									h.Name("password"),
+									h.Required(),
+									h.Class("w-full px-3 py-2 border rounded"),
+								),
+							),
+							h.Button(
+								h.Type("submit"),
+								h.Class(baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 w-full"),
+								g.Text("Sign in"),
+							),
+						),
+						g.Iff(a.oidc != nil, func() g.Node {
+							return g.Group([]g.Node{
+								h.Div(
+									h.Class("relative"),
+									h.Div(
+										h.Class("absolute inset-0 flex items-center"),
+										h.Div(h.Class("w-full border-t border-gray-300")),
+									),
+									h.Div(
+										h.Class("relative flex justify-center text-sm"),
+										h.Span(h.Class("bg-white px-2 text-gray-500"), g.Text("or")),
+									),
+								),
+								h.A(
+									h.Href(a.oidc.authCodeURL),
+									h.Class(baseButtonClass+"border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 px-4 py-2 w-full text-center"),
+									g.Text("Sign in with SSO"),
+								),
+							})
+						}),
+					),
+				},
+			},
+		)
+
+		page.Render(w)
 	})
 
 	m.HandleFunc(http.MethodPost+" "+a.loginEndpoint, func(w http.ResponseWriter, r *http.Request) {
-		oidcLoginURL := ""
-		if a.oidc != nil {
-			oidcLoginURL = a.oidc.loginURL
-		}
-
 		if err := r.ParseForm(); err != nil {
-			components{endpoints: endpoints{}}.LoginPage("Invalid form submission", oidcLoginURL).Render(w)
+			WriteError(w, "Invalid form submission", http.StatusBadRequest, err)
 			return
 		}
 
@@ -487,12 +502,14 @@ func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
 
 		user, err := a.repo.GetUser(r.Context(), email)
 		if err != nil || user.PasswordHash == nil {
-			components{endpoints: endpoints{}}.LoginPage("Invalid email or password", oidcLoginURL).Render(w)
+			slog.Error("User not found", "email", email)
+			WriteError(w, "Invalid email or password", http.StatusBadRequest, err)
 			return
 		}
 
 		if err := bcryptCompare([]byte(password), []byte(*user.PasswordHash)); err != nil {
-			components{endpoints: endpoints{}}.LoginPage("Invalid email or password", oidcLoginURL).Render(w)
+			slog.Error("Bad password", "email", email)
+			WriteError(w, "Invalid email or password", http.StatusBadRequest, err)
 			return
 		}
 
@@ -515,10 +532,11 @@ func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
 	})
 
 	// Self-login logout (clears session cookie)
-	m.HandleFunc(http.MethodGet+" /logout", func(w http.ResponseWriter, r *http.Request) {
+	m.HandleFunc(http.MethodGet+" "+a.logoutEndpoint, func(w http.ResponseWriter, r *http.Request) {
 		clearSessionCookie(w)
 		if a.oidc != nil {
-			a.oidc.clearAllCookies(w)
+			a.oidc.logout(w, r)
+			return
 		}
 		http.Redirect(w, r, a.loginEndpoint, http.StatusFound)
 	})

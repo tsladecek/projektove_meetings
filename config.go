@@ -29,6 +29,9 @@ type ConfigAuth struct {
 	SecretKey       string `toml:"secret_key" env:"SECRETKEY" env-required:"true"`
 	DefaultUser     string `toml:"default_user" env:"DEFAULTUSER" env-default:""`
 	DefaultPassword string `toml:"default_password" env:"DEFAULTPASSWORD" env-default:""`
+
+	EndpointLogin  string `toml:"endpoint_login" env:"ENDPOINTLOGIN" env-default:"/login"`
+	EndpointLogout string `toml:"endpoint_logout" env:"ENDPOINTLOGOUT" env-default:"/logout"`
 }
 
 type ConfigOIDC struct {
@@ -38,7 +41,7 @@ type ConfigOIDC struct {
 	IDTokenCookieName      string `toml:"id_token_cookie_name" env:"IDTOKENCOOKIENAME"`
 	RefreshTokenCookieName string `toml:"refresh_token_cookie_name" env:"REFRESHTOKENCOOKIENAME" env-default:""`
 	CallbackEndpoint       string `toml:"callback_endpoint" env:"CALLBACKENDPOINT" env-default:"/oauth2/callback"`
-	LogoutEndpoint         string `toml:"logout_endpoint" env:"LOGOUTENDPOINT" env-default:"/oauth2/logout"`
+	EndSessionURL          string `toml:"end_session_url" env:"ENDSESSIONURL"`
 }
 
 type ConfigProjektove struct {
