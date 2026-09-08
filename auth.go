@@ -218,7 +218,6 @@ func (a AuthOIDC) logout(w http.ResponseWriter, r *http.Request) {
 	idTokenHint := ""
 	idTokenCookie, err := r.Cookie(a.idTokenCookieName)
 	if err != nil {
-		slog.Error("No ID Token Found during logout")
 		http.Redirect(w, r, a.loginURL, http.StatusFound)
 		return
 	}
