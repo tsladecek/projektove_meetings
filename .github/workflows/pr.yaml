@@ -30,7 +30,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.26'
+        go-version: '1.27'
 
     - name: Check out code
       uses: actions/checkout@v4
@@ -45,7 +45,7 @@ jobs:
     - name: Install migrate if not cached
       if: steps.cache-migrate.outputs.cache-hit != 'true'
       run: |
-        curl -L https://github.com/golang-migrate/migrate/releases/download/v4.18.2/migrate.linux-amd64.tar.gz | tar xz
+        curl -L https://github.com/golang-migrate/migrate/releases/download/v4.19.1/migrate.linux-amd64.tar.gz | tar xz
         sudo mv migrate /usr/local/bin
 
     - name: Download Go modules

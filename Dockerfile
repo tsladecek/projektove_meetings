@@ -1,4 +1,4 @@
-FROM golang:1.26 AS builder
+FROM golang:1.27 AS builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
@@ -7,7 +7,8 @@ RUN go mod download
 ARG VERSION
 
 COPY cmd cmd
-COPY internal internal
+COPY *.go .
+COPY static static
 COPY Makefile .
 
 RUN VERSION=$VERSION make bin/app

@@ -3,3 +3,4 @@
 *.sqlite*
 examples
 tmp
+bin

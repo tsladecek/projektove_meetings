@@ -13,6 +13,8 @@ import (
 	projektovemeeting "github.com/tsladecek/projektove_meeting"
 )
 
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error(err.Error())
@@ -22,7 +24,13 @@ func main() {
 
 func run() error {
 	c := flag.String("c", "", "config path")
+	v := flag.Bool("v", false, "print version and exit")
 	flag.Parse()
+
+	if *v {
+		println(version)
+		return nil
+	}
 
 	config, err := projektovemeeting.NewConfig(*c)
 	if err != nil {
