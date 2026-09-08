@@ -14,6 +14,7 @@ type Config struct {
 	BaseURL    string           `toml:"base_url" env:"BASEURL" env-required:"true"`
 	Port       int              `toml:"port" env:"PORT" env-default:"8000"`
 	Projektove ConfigProjektove `toml:"projektove" env-prefix:"PROJEKTOVE_" env-required:"true"`
+	Auth       ConfigAuth       `toml:"auth" env-prefix:"AUTH_" env-required:"true"`
 	OIDC       ConfigOIDC       `toml:"oidc" env-prefix:"OIDC_"`
 	Logging    ConfigLogging    `toml:"logging" env-prefix:"LOGGING_"`
 }
@@ -24,11 +25,17 @@ type ConfigLogging struct {
 	Level string `toml:"level" env:"LEVEL" env-default:"info"`
 }
 
+type ConfigAuth struct {
+	SecretKey       string `toml:"secret_key" env:"SECRETKEY" env-required:"true"`
+	DefaultUser     string `toml:"default_user" env:"DEFAULTUSER" env-default:""`
+	DefaultPassword string `toml:"default_password" env:"DEFAULTPASSWORD" env-default:""`
+}
+
 type ConfigOIDC struct {
-	Issuer                 string `toml:"issuer" env:"ISSUER" env-required:"true"`
-	ClientID               string `toml:"client_id" env:"CLIENTID" env-required:"true"`
-	ClientSecret           string `toml:"client_secret" env:"CLIENTSECRET" env-required:"true"`
-	IDTokenCookieName      string `toml:"id_token_cookie_name" env:"IDTOKENCOOKIENAME" env-required:"true"`
+	Issuer                 string `toml:"issuer" env:"ISSUER"`
+	ClientID               string `toml:"client_id" env:"CLIENTID"`
+	ClientSecret           string `toml:"client_secret" env:"CLIENTSECRET"`
+	IDTokenCookieName      string `toml:"id_token_cookie_name" env:"IDTOKENCOOKIENAME"`
 	RefreshTokenCookieName string `toml:"refresh_token_cookie_name" env:"REFRESHTOKENCOOKIENAME" env-default:""`
 	CallbackEndpoint       string `toml:"callback_endpoint" env:"CALLBACKENDPOINT" env-default:"/oauth2/callback"`
 	LogoutEndpoint         string `toml:"logout_endpoint" env:"LOGOUTENDPOINT" env-default:"/oauth2/logout"`

@@ -51,16 +51,31 @@ func run() error {
 
 	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, NewLLMProvider: projektovemeeting.NewLLM, Users: config.Projektove.Users, TxProvider: txp}
 
+	if config.Auth.DefaultUser != "" {
+		hash, err := projektovemeeting.HashPassword(config.Auth.DefaultPassword)
+		if err != nil {
+			return fmt.Errorf("when hashing default user password: %w", err)
+		}
+		if err := repo.UpsertDefaultUser(context.Background(), config.Auth.DefaultUser, hash); err != nil {
+			return fmt.Errorf("when bootstrapping default user: %w", err)
+		}
+	}
+
 	queue := projektovemeeting.NewInferenceQueue(repo, projektovemeeting.DefaultQueueWorkers, projektovemeeting.DefaultQueuePollInterval, controller.RunInference)
 	queue.Start()
 	defer queue.Stop()
 
-	auth, err := projektovemeeting.NewAuth(repo, config.OIDC, config.BaseURL)
+	var oidcConfig *projektovemeeting.ConfigOIDC
+	if config.OIDC.Issuer != "" {
+		oidcConfig = &config.OIDC
+	}
+
+	auth, err := projektovemeeting.NewAuth(repo, oidcConfig, config.Auth, config.BaseURL)
 	if err != nil {
 		return fmt.Errorf("when constructing auth adapter: %w", err)
 	}
 
-	handler := projektovemeeting.NewHandler(auth, "/", config.OIDC.IDTokenCookieName, controller, config.Projektove.IssueEndpoint, config.OIDC.LogoutEndpoint)
+	handler := projektovemeeting.NewHandler(auth, "/", controller, config.Projektove.IssueEndpoint)
 
 	server := http.Server{Addr: fmt.Sprintf(":%d", config.Port), Handler: handler}
 

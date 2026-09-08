@@ -143,6 +143,7 @@ type User struct {
 	ID              int
 	IsAdmin         bool
 	Email           string
+	PasswordHash    *string
 	ProjektoveToken string
 	LLMModels       []LLMModel
 }

@@ -51,6 +51,7 @@ type Repository interface {
 	GetUserByID(ctx context.Context, id int) (User, error)
 	StoreUser(ctx context.Context, obj UserCreate) (int, error)
 	UpdateUser(ctx context.Context, user User, obj UserUpdate) error
+	UpsertDefaultUser(ctx context.Context, email, passwordHash string) error
 }
 
 type Auth interface {
