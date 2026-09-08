@@ -31,7 +31,42 @@ type api struct {
 	components components
 }
 
-func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, projektoveIssueEndpoint, logoutEndpoint string) http.Handler {
+type endpoints struct {
+	root   Endpoint
+	static Endpoint
+
+	// pages
+	user      Endpoint
+	prompts   Endpoint
+	newPrompt Endpoint
+	prompt    Endpoint
+	batches   Endpoint
+	newBatch  Endpoint
+	batch     Endpoint
+
+	// api - should have /api prefix
+	updateUser    Endpoint
+	addContext    Endpoint
+	deleteContext Endpoint
+	addLLMModel   Endpoint
+
+	listContexts Endpoint
+	createPrompt Endpoint
+	createBatch  Endpoint
+
+	updateIssue Endpoint
+	submitIssue Endpoint
+	deleteIssue Endpoint
+}
+
+type components struct {
+	endpoints               endpoints
+	projektoveIssueEndpoint string
+
+	endpointLogout Endpoint
+}
+
+func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssueEndpoint string, logoutEndpoint Endpoint) http.Handler {
 	m := http.NewServeMux()
 
 	burl, err := url.Parse(baseURL)
@@ -50,7 +85,6 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 	e := endpoints{
 		root:   end(http.MethodGet, "/"),
 		static: end(http.MethodGet, "/static/"),
-		logout: end(http.MethodGet, logoutEndpoint),
 
 		// pages
 		user:      end(http.MethodGet, "/user"),
@@ -77,7 +111,7 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 		deleteIssue: endAPI(http.MethodDelete, "/issues/{id}"),
 	}
 
-	c := components{endpoints: e, projektoveIssueEndpoint: projektoveIssueEndpoint}
+	c := components{endpoints: e, projektoveIssueEndpoint: projektoveIssueEndpoint, endpointLogout: logoutEndpoint}
 	a := api{controller: controller, basePath: burl.Path, components: c}
 
 	type endpointHandler struct {
@@ -85,9 +119,10 @@ func NewHandler(auth Auth, baseURL, cookieName string, controller Controller, pr
 		handler  http.Handler
 	}
 
+	m.Handle(e.static.Pattern(), a.static())
+
 	for _, eh := range []endpointHandler{
 		{endpoint: e.root, handler: a.root()},
-		{endpoint: e.static, handler: a.static()},
 
 		// pages
 		{endpoint: e.user, handler: a.user()},
@@ -719,40 +754,6 @@ func (a api) deleteIssue() http.HandlerFunc {
 	}
 }
 
-type endpoints struct {
-	root   Endpoint
-	static Endpoint
-	logout Endpoint
-
-	// pages
-	user      Endpoint
-	prompts   Endpoint
-	newPrompt Endpoint
-	prompt    Endpoint
-	batches   Endpoint
-	newBatch  Endpoint
-	batch     Endpoint
-
-	// api - should have /api prefix
-	updateUser    Endpoint
-	addContext    Endpoint
-	deleteContext Endpoint
-	addLLMModel   Endpoint
-
-	listContexts Endpoint
-	createPrompt Endpoint
-	createBatch  Endpoint
-
-	updateIssue Endpoint
-	submitIssue Endpoint
-	deleteIssue Endpoint
-}
-
-type components struct {
-	endpoints               endpoints
-	projektoveIssueEndpoint string
-}
-
 func (c components) Page(body g.Node) g.Node {
 	return co.HTML5(
 		co.HTML5Props{
@@ -792,6 +793,7 @@ type navLink struct {
 func (c components) Sidebar() g.Node {
 	groups := [][]navLink{
 		{
+			{label: "Home", href: c.endpoints.root.Path(), icon: solid.Home(h.Class("h-5 w-5 shrink-0"))},
 			{label: "User", href: c.endpoints.user.Path(), icon: solid.User(h.Class("h-5 w-5 shrink-0"))},
 		},
 		{
@@ -828,7 +830,7 @@ func (c components) Sidebar() g.Node {
 		h.Hr(h.Class("border-gray-700 my-2")),
 		h.Nav(h.Class("space-y-1 w-full"),
 			h.A(
-				h.Href(c.endpoints.logout.Path()),
+				h.Href(c.endpointLogout.Path()),
 				h.Title("Logout"),
 				h.Class("flex items-center justify-center md:justify-start gap-3 w-full px-2 py-2 rounded hover:bg-gray-700"),
 				solid.ArrowRightOnRectangle(h.Class("h-5 w-5 shrink-0")),
@@ -882,7 +884,7 @@ func (c components) RootPage() g.Node {
 		h.Class("max-w-3xl space-y-8"),
 
 		h.Div(
-			h.H1(h.Class("text-2xl font-bold"), g.Text("Meetings to Issues")),
+			h.H1(h.Class("text-2xl font-bold"), g.Text("Meetings -> Projektove")),
 			h.P(
 				h.Class("text-gray-500 mt-1"),
 				g.Text("Turn meeting notes and CSV tables into Projektove issues. Review, edit and submit them in one place."),
@@ -1293,7 +1295,7 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 	if view.Status.IsPending() {
 		return h.Div(
 			h.ID("prompt-view"),
-			htmx.Get("/prompts/"+view.ID),
+			htmx.Get(strings.Replace(c.endpoints.prompt.Path(), "{id}", view.ID, 1)),
 			htmx.Trigger("every 5s"),
 			htmx.Swap("outerHTML"),
 			h.Class("space-y-6 max-w-3xl"),

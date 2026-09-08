@@ -542,7 +542,7 @@ func (r *RepositorySqlite) DeleteContextByUUID(ctx context.Context, user User, u
 
 func (r *RepositorySqlite) GetUser(ctx context.Context, email string) (User, error) {
 	u := User{Email: email, LLMModels: make([]LLMModel, 0)}
-	err := r.DB.QueryRowContext(ctx, "SELECT id, projektove_token, is_admin FROM users WHERE email = ?", email).Scan(&u.ID, &u.ProjektoveToken, &u.IsAdmin)
+	err := r.DB.QueryRowContext(ctx, "SELECT id, password_hash, projektove_token, is_admin FROM users WHERE email = ?", email).Scan(&u.ID, &u.PasswordHash, &u.ProjektoveToken, &u.IsAdmin)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, ErrUserNotFound
@@ -559,7 +559,7 @@ func (r *RepositorySqlite) GetUser(ctx context.Context, email string) (User, err
 
 func (r *RepositorySqlite) GetUserByID(ctx context.Context, id int) (User, error) {
 	u := User{ID: id, LLMModels: make([]LLMModel, 0)}
-	err := r.DB.QueryRowContext(ctx, "SELECT email, projektove_token, is_admin FROM users WHERE id = ?", id).Scan(&u.Email, &u.ProjektoveToken, &u.IsAdmin)
+	err := r.DB.QueryRowContext(ctx, "SELECT email, password_hash, projektove_token, is_admin FROM users WHERE id = ?", id).Scan(&u.Email, &u.PasswordHash, &u.ProjektoveToken, &u.IsAdmin)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, ErrUserNotFound
@@ -598,7 +598,7 @@ func (r *RepositorySqlite) loadProviders(ctx context.Context, u *User) error {
 }
 
 func (r *RepositorySqlite) StoreUser(ctx context.Context, obj UserCreate) (int, error) {
-	result, execErr := r.DB.ExecContext(ctx, "INSERT INTO users (email, is_admin, projektove_token) VALUES (?, false, ?)", obj.Email, obj.ProjektoveToken)
+	result, execErr := r.DB.ExecContext(ctx, "INSERT INTO users (email, password_hash, is_admin, projektove_token) VALUES (?, ?, false, ?)", obj.Email, obj.PasswordHash, obj.ProjektoveToken)
 	if execErr != nil {
 		return 0, fmt.Errorf("failed to insert user: %w", execErr)
 	}
@@ -625,6 +625,28 @@ func (r *RepositorySqlite) StoreUser(ctx context.Context, obj UserCreate) (int, 
 	}
 
 	return int(id), nil
+}
+
+func (r *RepositorySqlite) UpsertDefaultUser(ctx context.Context, email, passwordHash string) error {
+	var existingID int
+	err := r.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE email = ?", email).Scan(&existingID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, execErr := r.DB.ExecContext(ctx, "INSERT INTO users (email, password_hash, is_admin, projektove_token) VALUES (?, ?, true, '')", email, passwordHash)
+			if execErr != nil {
+				return fmt.Errorf("failed to create default user: %w", execErr)
+			}
+			return nil
+		}
+		return fmt.Errorf("when checking for default user: %w", err)
+	}
+
+	_, err = r.DB.ExecContext(ctx, "UPDATE users SET password_hash = ? WHERE id = ? AND (password_hash IS NULL OR password_hash = '')", passwordHash, existingID)
+	if err != nil {
+		return fmt.Errorf("failed to update default user password: %w", err)
+	}
+
+	return nil
 }
 
 func (r *RepositorySqlite) UpdateUser(ctx context.Context, u User, obj UserUpdate) error {

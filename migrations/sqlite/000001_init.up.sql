@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT NOT NULL,
+    password_hash TEXT,
     is_admin INTEGER NOT NULL CHECK (is_admin IN (0, 1)),
     projektove_token TEXT NOT NULL
 );

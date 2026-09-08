@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -181,7 +183,7 @@ func TestAuthenticate_Success(t *testing.T) {
 	auth := AuthOIDC{repo: repo, verifier: verifier}
 
 	token := signToken(t, issuer, testClientID, testEmail, testKid)
-	user, _, err := auth.Authenticate(t.Context(), token, "")
+	user, err := auth.authenticate(t.Context(), &Tokens{ID: token})
 	require.NoError(t, err)
 	assert.Equal(t, testEmail, user.Email)
 	assert.NotZero(t, user.ID)
@@ -194,7 +196,7 @@ func TestAuthenticate_AutoProvision(t *testing.T) {
 	auth := AuthOIDC{repo: repo, verifier: verifier}
 
 	token := signToken(t, issuer, testClientID, newEmail, testKid)
-	user, _, err := auth.Authenticate(t.Context(), token, "")
+	user, err := auth.authenticate(t.Context(), &Tokens{ID: token})
 	require.NoError(t, err)
 	assert.Equal(t, newEmail, user.Email)
 	assert.NotZero(t, user.ID)
@@ -210,7 +212,7 @@ func TestAuthenticate_InvalidToken(t *testing.T) {
 	verifier, _ := authVerifier(t, testClientID)
 	auth := AuthOIDC{repo: repo, verifier: verifier}
 
-	_, _, err := auth.Authenticate(t.Context(), "not-a-token", "")
+	_, err := auth.authenticate(t.Context(), &Tokens{ID: "not-a-token"})
 	require.Error(t, err)
 }
 
@@ -221,15 +223,14 @@ func TestAuthenticate_WrongAudience(t *testing.T) {
 	auth := AuthOIDC{repo: repo, verifier: verifier}
 
 	token := signToken(t, issuer, "other-client", testEmail, testKid)
-	_, _, err := auth.Authenticate(t.Context(), token, "")
+	_, err := auth.authenticate(t.Context(), &Tokens{ID: token})
 	require.Error(t, err)
 }
 
 func TestMiddlewareAuth_ValidCookie(t *testing.T) {
 	repo := newRepository(t)
 	createUser(t, repo, testEmail)
-	verifier, issuer := authVerifier(t, testClientID)
-	auth := AuthOIDC{repo: repo, verifier: verifier, idTokenCookieName: "token", refreshCookieName: "refresh"}
+	auth, issuer := authCompositeWithOIDC(t, repo)
 
 	token := signToken(t, issuer, testClientID, testEmail, testKid)
 
@@ -252,7 +253,8 @@ func TestMiddlewareAuth_ValidCookie(t *testing.T) {
 }
 
 func TestMiddlewareAuth_MissingCookie(t *testing.T) {
-	auth := AuthOIDC{loginURL: "/login"}
+	repo := newRepository(t)
+	auth, _ := authCompositeWithOIDC(t, repo)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -268,8 +270,7 @@ func TestMiddlewareAuth_MissingCookie(t *testing.T) {
 
 func TestMiddlewareAuth_InvalidToken(t *testing.T) {
 	repo := newRepository(t)
-	verifier, _ := authVerifier(t, testClientID)
-	auth := AuthOIDC{repo: repo, verifier: verifier, idTokenCookieName: "token", refreshCookieName: "refresh", loginURL: "/login"}
+	auth, _ := authCompositeWithOIDC(t, repo)
 
 	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
 	req.AddCookie(&http.Cookie{Name: "token", Value: "garbage"})
@@ -281,10 +282,10 @@ func TestMiddlewareAuth_InvalidToken(t *testing.T) {
 	auth.Middleware(next).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusFound, rec.Code)
-	assert.Equal(t, "/login", rec.Header().Get("Location"))
+	assert.True(t, strings.HasPrefix(rec.Header().Get("Location"), "https://sso.example.com/endsession?id_token_hint="))
 }
 
-func authOIDCWithTokenEndpoint(t *testing.T, repo Repository) AuthOIDC {
+func authOIDCWithTokenEndpoint(t *testing.T, repo Repository) (AuthOIDC, string) {
 	t.Helper()
 	verifier, issuer := authVerifier(t, testClientID)
 	return AuthOIDC{
@@ -292,47 +293,66 @@ func authOIDCWithTokenEndpoint(t *testing.T, repo Repository) AuthOIDC {
 		verifier:          verifier,
 		idTokenCookieName: "token",
 		refreshCookieName: "refresh",
+		authCodeURL:       "/login",
 		loginURL:          "/login",
+		endSessionURL:     "https://sso.example.com/endsession",
 		oauth2Config: oauth2.Config{
 			ClientID:     testClientID,
 			ClientSecret: "secret",
 			Endpoint:     oauth2.Endpoint{TokenURL: issuer + "/token"},
 		},
-	}
+	}, issuer
+}
+
+func authCompositeWithOIDC(t *testing.T, repo Repository) (*AuthComposite, string) {
+	t.Helper()
+	oidcAuth, issuer := authOIDCWithTokenEndpoint(t, repo)
+	hmacKey := sha256.Sum256([]byte("test-secret-key"))
+	return &AuthComposite{
+		oidc:                 &oidcAuth,
+		repo:                 repo,
+		secretKey:            hmacKey[:],
+		loginEndpoint:        NewEndpoint(http.MethodGet, "", "/login"),
+		authenticateEndpoint: NewEndpoint(http.MethodPost, "", "/login"),
+		logoutEndpoint:       NewEndpoint(http.MethodGet, "", "/logout"),
+		baseURL:              "http://app.test",
+	}, issuer
 }
 
 func TestAuthenticate_RefreshExpiredIDToken(t *testing.T) {
 	repo := newRepository(t)
 	createUser(t, repo, testEmail)
-	auth := authOIDCWithTokenEndpoint(t, repo)
+	auth, issuer := authOIDCWithTokenEndpoint(t, repo)
 
-	expired := signTokenExp(t, "", testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
-	user, result, err := auth.Authenticate(t.Context(), expired, testRefreshToken)
+	expired := signTokenExp(t, issuer, testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
+	tokens := Tokens{ID: expired, Refresh: testRefreshToken}
+	user, err := auth.authenticate(t.Context(), &tokens)
 	require.NoError(t, err)
 	assert.Equal(t, testEmail, user.Email)
-	assert.NotEmpty(t, result.IDToken)
-	assert.Equal(t, testRotatedRefreshToken, result.RefreshToken)
+	assert.NotEmpty(t, tokens.ID)
+	assert.NotEqual(t, expired, tokens.ID)
+	assert.Equal(t, testRotatedRefreshToken, tokens.Refresh)
 
-	_, err = auth.verifier.Verify(t.Context(), result.IDToken)
+	_, err = auth.verifier.Verify(t.Context(), tokens.ID)
 	require.NoError(t, err)
 }
 
 func TestAuthenticate_RefreshFails(t *testing.T) {
 	repo := newRepository(t)
 	createUser(t, repo, testEmail)
-	auth := authOIDCWithTokenEndpoint(t, repo)
+	auth, issuer := authOIDCWithTokenEndpoint(t, repo)
 
-	expired := signTokenExp(t, "", testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
-	_, _, err := auth.Authenticate(t.Context(), expired, "bad-refresh-token")
+	expired := signTokenExp(t, issuer, testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
+	_, err := auth.authenticate(t.Context(), &Tokens{ID: expired, Refresh: "bad-refresh-token"})
 	require.Error(t, err)
 }
 
 func TestMiddlewareAuth_RefreshesExpiredToken(t *testing.T) {
 	repo := newRepository(t)
 	createUser(t, repo, testEmail)
-	auth := authOIDCWithTokenEndpoint(t, repo)
+	auth, issuer := authCompositeWithOIDC(t, repo)
 
-	expired := signTokenExp(t, "", testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
+	expired := signTokenExp(t, issuer, testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
 
 	var gotUser User
 	var gotOK bool
@@ -369,9 +389,9 @@ func TestMiddlewareAuth_RefreshesExpiredToken(t *testing.T) {
 func TestMiddlewareAuth_RefreshFails(t *testing.T) {
 	repo := newRepository(t)
 	createUser(t, repo, testEmail)
-	auth := authOIDCWithTokenEndpoint(t, repo)
+	auth, issuer := authCompositeWithOIDC(t, repo)
 
-	expired := signTokenExp(t, "", testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
+	expired := signTokenExp(t, issuer, testClientID, testEmail, testKid, time.Now().Add(-time.Hour))
 
 	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
 	req.AddCookie(&http.Cookie{Name: "token", Value: expired})
@@ -384,7 +404,7 @@ func TestMiddlewareAuth_RefreshFails(t *testing.T) {
 	auth.Middleware(next).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusFound, rec.Code)
-	assert.Equal(t, "/login", rec.Header().Get("Location"))
+	assert.True(t, strings.HasPrefix(rec.Header().Get("Location"), "https://sso.example.com/endsession"))
 	for _, c := range rec.Result().Cookies() {
 		assert.Equal(t, "", c.Value)
 	}
@@ -399,7 +419,7 @@ func TestCallback_SetsRefreshCookie(t *testing.T) {
 		idTokenCookieName: "token",
 		refreshCookieName: "refresh",
 		callbackEndpoint:  "/oauth2/callback",
-		logoutEndoint:     "/oauth2/logout",
+		endSessionURL:     "/oauth2/logout",
 		baseURL:           "http://app.test",
 		oauth2Config: oauth2.Config{
 			ClientID:     testClientID,

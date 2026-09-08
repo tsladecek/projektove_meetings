@@ -11,9 +11,10 @@ import (
 
 type Config struct {
 	DB         string           `toml:"db" env:"DB" description:"name of the sqlite database for storing cache and prompt history" env-default:"db.sqlite"`
-	BaseURL    string           `toml:"base_url" env:"BASEURL" env-required:"true"`
+	BaseURL    string           `toml:"base_url" env:"BASEURL" env-default:"/"`
 	Port       int              `toml:"port" env:"PORT" env-default:"8000"`
 	Projektove ConfigProjektove `toml:"projektove" env-prefix:"PROJEKTOVE_" env-required:"true"`
+	Auth       ConfigAuth       `toml:"auth" env-prefix:"AUTH_" env-required:"true"`
 	OIDC       ConfigOIDC       `toml:"oidc" env-prefix:"OIDC_"`
 	Logging    ConfigLogging    `toml:"logging" env-prefix:"LOGGING_"`
 }
@@ -24,20 +25,29 @@ type ConfigLogging struct {
 	Level string `toml:"level" env:"LEVEL" env-default:"info"`
 }
 
+type ConfigAuth struct {
+	SecretKey       string `toml:"secret_key" env:"SECRETKEY" env-required:"true"`
+	DefaultUser     string `toml:"default_user" env:"DEFAULTUSER" env-default:"admin"`
+	DefaultPassword string `toml:"default_password" env:"DEFAULTPASSWORD" env-default:"password"`
+
+	EndpointLogin  string `toml:"endpoint_login" env:"ENDPOINTLOGIN" env-default:"/login"`
+	EndpointLogout string `toml:"endpoint_logout" env:"ENDPOINTLOGOUT" env-default:"/logout"`
+}
+
 type ConfigOIDC struct {
-	Issuer                 string `toml:"issuer" env:"ISSUER" env-required:"true"`
-	ClientID               string `toml:"client_id" env:"CLIENTID" env-required:"true"`
-	ClientSecret           string `toml:"client_secret" env:"CLIENTSECRET" env-required:"true"`
-	IDTokenCookieName      string `toml:"id_token_cookie_name" env:"IDTOKENCOOKIENAME" env-required:"true"`
-	RefreshTokenCookieName string `toml:"refresh_token_cookie_name" env:"REFRESHTOKENCOOKIENAME" env-default:""`
+	Issuer                 string `toml:"issuer" env:"ISSUER"`
+	ClientID               string `toml:"client_id" env:"CLIENTID"`
+	ClientSecret           string `toml:"client_secret" env:"CLIENTSECRET"`
+	EndSessionURL          string `toml:"end_session_url" env:"ENDSESSIONURL"`
+	IDTokenCookieName      string `toml:"id_token_cookie_name" env:"IDTOKENCOOKIENAME" env-default:"id_token"`
+	RefreshTokenCookieName string `toml:"refresh_token_cookie_name" env:"REFRESHTOKENCOOKIENAME" env-default:"refresh_token"`
 	CallbackEndpoint       string `toml:"callback_endpoint" env:"CALLBACKENDPOINT" env-default:"/oauth2/callback"`
-	LogoutEndpoint         string `toml:"logout_endpoint" env:"LOGOUTENDPOINT" env-default:"/oauth2/logout"`
 }
 
 type ConfigProjektove struct {
-	URL           string          `toml:"url" env:"URL" env-required:"true"`
+	URL           string          `toml:"url" env:"URL" env-required:"true" env-description:"api url"`
+	IssueEndpoint string          `toml:"issue_endpoint" env:"ISSUEENDPOINT" env-required:"true" env-description:"UI url to an issue, e.g. https://app.projektove.cz/<org>/tasks/%d"`
 	Users         ProjektoveUsers `toml:"users" env:"USERS" env-required:"true"`
-	IssueEndpoint string          `toml:"issue_endpoint" env:"ISSUEENDPOINT" env-required:"true"`
 }
 
 func NewConfig(configPath string) (Config, error) {

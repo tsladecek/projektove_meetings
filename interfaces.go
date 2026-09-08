@@ -51,10 +51,19 @@ type Repository interface {
 	GetUserByID(ctx context.Context, id int) (User, error)
 	StoreUser(ctx context.Context, obj UserCreate) (int, error)
 	UpdateUser(ctx context.Context, user User, obj UserUpdate) error
+	UpsertDefaultUser(ctx context.Context, email, passwordHash string) error
+}
+
+type Tokens struct {
+	// oidc
+	ID      string
+	Refresh string
+	// self
+	Session string
 }
 
 type Auth interface {
-	Authenticate(ctx context.Context, idToken, refreshToken string) (User, AuthTokenResult, error)
+	Authenticate(ctx context.Context, token *Tokens) (User, error)
 	RegisterRoutes(m *http.ServeMux)
 	Middleware(next http.Handler) http.Handler
 }

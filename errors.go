@@ -21,6 +21,7 @@ var (
 	ErrParentDoesNotBelongToUser          = errors.New("parent does not belong to user")
 	ErrIssueIncomplete                    = errors.New("issue is missing required fields")
 	ErrProjektoveTokenNotConfigured       = errors.New("projektove token is not configured")
+	ErrInvalidCredentials                = errors.New("invalid credentials")
 )
 
 // BatchCSVError carries the list of human-readable validation problems found

@@ -2,15 +2,26 @@ package projektovemeeting
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
+
+	g "maragu.dev/gomponents"
+	co "maragu.dev/gomponents/components"
+	h "maragu.dev/gomponents/html"
 )
+
+const sessionCookieName = "session_token"
 
 type AuthOIDC struct {
 	repo              Repository
@@ -21,40 +32,31 @@ type AuthOIDC struct {
 	baseURL           string
 	issuer            string
 
-	// inferred
 	callbackEndpoint string
-	logoutEndoint    string
+	endSessionURL    string
 	oauth2Config     oauth2.Config
-	loginURL         string
+	authCodeURL      string
+
+	loginURL string
 }
 
-func NewAuth(repo Repository, config ConfigOIDC, baseURLRaw string) (Auth, error) {
+func NewAuthOIDC(repo Repository, config ConfigOIDC, baseURL, loginURL string) (*AuthOIDC, error) {
 	provider, err := oidc.NewProvider(context.Background(), config.Issuer)
 	if err != nil {
-		return AuthOIDC{}, fmt.Errorf("when discovering oidc provider %q: %w", config.Issuer, err)
+		return nil, fmt.Errorf("when discovering oidc provider %q: %w", config.Issuer, err)
 	}
 
-	baseURL, err := url.Parse(baseURLRaw)
-	if err != nil {
-		return nil, fmt.Errorf("when parsing base url %q: %w", baseURLRaw, err)
-	}
-
-	callbackURL, err := url.JoinPath(baseURL.String(), config.CallbackEndpoint)
+	callbackURL, err := url.JoinPath(baseURL, config.CallbackEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("when parsing callback url %q: %w", config.CallbackEndpoint, err)
 	}
 
-	// Configure an OpenID Connect aware OAuth2 client.
 	oauth2Config := oauth2.Config{
 		ClientID:     config.ClientID,
 		ClientSecret: config.ClientSecret,
 		RedirectURL:  callbackURL,
-
-		// Discovery returns the OAuth2 endpoints.
-		Endpoint: provider.Endpoint(),
-
-		// "openid" is a required scope for OpenID Connect flows.
-		Scopes: []string{oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail},
+		Endpoint:     provider.Endpoint(),
+		Scopes:       []string{oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail},
 	}
 
 	refreshTokenCookieName := config.RefreshTokenCookieName
@@ -62,7 +64,7 @@ func NewAuth(repo Repository, config ConfigOIDC, baseURLRaw string) (Auth, error
 		refreshTokenCookieName = config.IDTokenCookieName + "_refresh"
 	}
 
-	return AuthOIDC{
+	return &AuthOIDC{
 		repo:              repo,
 		verifier:          provider.Verifier(&oidc.Config{ClientID: config.ClientID}),
 		provider:          provider,
@@ -70,10 +72,11 @@ func NewAuth(repo Repository, config ConfigOIDC, baseURLRaw string) (Auth, error
 		refreshCookieName: refreshTokenCookieName,
 		callbackEndpoint:  config.CallbackEndpoint,
 		oauth2Config:      oauth2Config,
-		loginURL:          oauth2Config.AuthCodeURL(""),
-		baseURL:           baseURL.String(),
-		logoutEndoint:     config.LogoutEndpoint,
+		authCodeURL:       oauth2Config.AuthCodeURL(""),
+		baseURL:           baseURL,
+		endSessionURL:     config.EndSessionURL,
 		issuer:            config.Issuer,
+		loginURL:          loginURL,
 	}, nil
 }
 
@@ -81,33 +84,31 @@ type oidcClaims struct {
 	Email string `json:"email"`
 }
 
-type AuthTokenResult struct {
-	IDToken      string
-	RefreshToken string
-}
-
-func (a AuthOIDC) Authenticate(ctx context.Context, idToken, refreshToken string) (User, AuthTokenResult, error) {
-	user, err := a.authenticateWithIDToken(ctx, idToken)
+func (a AuthOIDC) authenticate(ctx context.Context, tokens *Tokens) (User, error) {
+	user, err := a.authenticateWithIDToken(ctx, tokens.ID)
 	if err == nil {
-		return user, AuthTokenResult{}, nil
+		return user, nil
 	}
 
-	if refreshToken == "" {
-		return User{}, AuthTokenResult{}, err
+	if tokens.Refresh == "" {
+		return User{}, err
 	}
 
-	refreshedIDToken, rotatedRefreshToken, refreshErr := a.refresh(ctx, refreshToken)
+	refreshedIDToken, rotatedRefreshToken, refreshErr := a.refresh(ctx, tokens.Refresh)
 	if refreshErr != nil {
 		slog.Debug("Token refresh failed", "error", refreshErr.Error())
-		return User{}, AuthTokenResult{}, fmt.Errorf("when refreshing session (id token verification failed: %v): %w", err, refreshErr)
+		return User{}, fmt.Errorf("when refreshing session (id token verification failed: %v): %w", err, refreshErr)
 	}
 
 	user, err = a.authenticateWithIDToken(ctx, refreshedIDToken)
 	if err != nil {
-		return User{}, AuthTokenResult{}, err
+		return User{}, err
 	}
 
-	return user, AuthTokenResult{IDToken: refreshedIDToken, RefreshToken: rotatedRefreshToken}, nil
+	tokens.ID = refreshedIDToken
+	tokens.Refresh = rotatedRefreshToken
+
+	return user, nil
 }
 
 func (a AuthOIDC) authenticateWithIDToken(ctx context.Context, token string) (User, error) {
@@ -184,21 +185,18 @@ func (a AuthOIDC) RegisterRoutes(m *http.ServeMux) {
 			return
 		}
 
-		// Extract the ID Token from OAuth2 token.
 		rawIDToken, ok := oauth2Token.Extra("id_token").(string)
 		if !ok {
 			WriteError(w, "Missing ID Token", http.StatusUnauthorized, nil)
 			return
 		}
 
-		// Parse and verify ID Token payload.
 		idToken, err := a.verifier.Verify(ctx, rawIDToken)
 		if err != nil {
 			WriteError(w, "Token verification failed", http.StatusUnauthorized, err)
 			return
 		}
 
-		// Extract custom claims
 		var claims struct {
 			Email string `json:"email"`
 		}
@@ -214,20 +212,19 @@ func (a AuthOIDC) RegisterRoutes(m *http.ServeMux) {
 		slog.Debug("Authentication Successful")
 		http.Redirect(w, r, a.baseURL, http.StatusFound)
 	})
+}
 
-	m.HandleFunc(http.MethodGet+" "+a.logoutEndoint, func(w http.ResponseWriter, r *http.Request) {
-		idTokenHint := ""
-		idTokenCookie, err := r.Cookie(a.idTokenCookieName)
-		if err != nil {
-			slog.Error("No ID Token Found during logout")
-			http.Redirect(w, r, a.baseURL, http.StatusFound)
-			return
-		}
+func (a AuthOIDC) logout(w http.ResponseWriter, r *http.Request) {
+	idTokenHint := ""
+	idTokenCookie, err := r.Cookie(a.idTokenCookieName)
+	if err != nil {
+		http.Redirect(w, r, a.loginURL, http.StatusFound)
+		return
+	}
 
-		idTokenHint = idTokenCookie.Value
-		a.clearCookies(w)
-		http.Redirect(w, r, fmt.Sprintf("%s/protocol/openid-connect/logout?id_token_hint=%s&post_logout_redirect_uri=%s", a.issuer, idTokenHint, url.QueryEscape(a.loginURL)), http.StatusFound)
-	})
+	idTokenHint = idTokenCookie.Value
+	a.clearCookies(w)
+	http.Redirect(w, r, fmt.Sprintf("%s?id_token_hint=%s&post_logout_redirect_uri=%s", a.endSessionURL, idTokenHint, url.QueryEscape(a.loginURL)), http.StatusFound)
 }
 
 func setAuthCookie(w http.ResponseWriter, name, value string) {
@@ -245,42 +242,336 @@ func (a AuthOIDC) clearCookies(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: a.refreshCookieName, Path: "/", Value: "", MaxAge: -1, HttpOnly: true, Secure: true})
 }
 
-func (a AuthOIDC) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		idTokenCookie, idErr := r.Cookie(a.idTokenCookieName)
-		refreshCookie, refreshErr := r.Cookie(a.refreshCookieName)
-		if idErr != nil && refreshErr != nil {
-			slog.Debug("No authentication cookies found")
-			http.Redirect(w, r, a.loginURL, http.StatusFound)
-			return
-		}
+func (a AuthOIDC) setCookies(w http.ResponseWriter, result Tokens) {
+	if result.ID != "" {
+		setAuthCookie(w, a.idTokenCookieName, result.ID)
+	}
+	if result.Refresh != "" {
+		setAuthCookie(w, a.refreshCookieName, result.Refresh)
+	}
+}
 
-		idToken := ""
-		if idErr == nil {
-			idToken = idTokenCookie.Value
-		}
-		refreshToken := ""
-		if refreshErr == nil {
-			refreshToken = refreshCookie.Value
-		}
+func (a AuthOIDC) clearAllCookies(w http.ResponseWriter) {
+	a.clearCookies(w)
+}
 
-		user, result, err := a.Authenticate(r.Context(), idToken, refreshToken)
+func (a *AuthComposite) Authenticate(ctx context.Context, tokens *Tokens) (User, error) {
+	if tokens.Session != "" {
+		user, err := a.validateSessionToken(ctx, tokens.Session)
 		if err != nil {
-			slog.Debug("Authentication failed", "error", err.Error())
-			a.clearCookies(w)
-			http.Redirect(w, r, a.loginURL, http.StatusFound)
+			return User{}, fmt.Errorf("when validating session token: %w", err)
+		}
+
+		return user, nil
+	}
+
+	if a.oidc == nil {
+		return User{}, fmt.Errorf("oidc not configured")
+	}
+
+	if tokens.ID == "" {
+		return User{}, fmt.Errorf("id token is empty")
+	}
+
+	user, err := a.oidc.authenticate(ctx, tokens)
+	if err != nil {
+		return User{}, fmt.Errorf("when validating session token: %w", err)
+	}
+
+	return user, nil
+
+}
+
+// AuthComposite combines optional OIDC auth with self-login (JWT session) auth.
+type AuthComposite struct {
+	oidc                 *AuthOIDC
+	repo                 Repository
+	secretKey            []byte
+	baseURL              string
+	loginEndpoint        Endpoint
+	authenticateEndpoint Endpoint
+	logoutEndpoint       Endpoint
+}
+
+func NewAuth(repo Repository, oidcConfig *ConfigOIDC, secretKey string, endpointLogin, endpointLogout Endpoint, baseURL *url.URL) (Auth, error) {
+	loginURL, err := url.JoinPath(baseURL.String(), endpointLogin.Path())
+	if err != nil {
+		return nil, fmt.Errorf("when constructing login url: %w", err)
+	}
+	_, err = url.JoinPath(baseURL.String(), endpointLogout.Path())
+	if err != nil {
+		return nil, fmt.Errorf("when constructing logout url: %w", err)
+	}
+
+	var oidcAuth *AuthOIDC
+	if oidcConfig != nil && oidcConfig.Issuer != "" {
+		var err error
+		oidcAuth, err = NewAuthOIDC(repo, *oidcConfig, baseURL.String(), loginURL)
+		if err != nil {
+			return nil, fmt.Errorf("when constructing OIDC auth: %w", err)
+		}
+	}
+
+	hmacKey := sha256.Sum256([]byte(secretKey))
+
+	return &AuthComposite{
+		oidc:                 oidcAuth,
+		repo:                 repo,
+		secretKey:            hmacKey[:],
+		baseURL:              baseURL.String(),
+		loginEndpoint:        endpointLogin,
+		logoutEndpoint:       endpointLogout,
+		authenticateEndpoint: NewEndpoint(http.MethodPost, baseURL.Path, endpointLogin.PathRaw()),
+	}, nil
+}
+
+func (a *AuthComposite) generateSessionToken(userID int) (string, error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id": userID,
+		"exp":     time.Now().Add(24 * time.Hour).Unix(),
+	})
+	return token.SignedString(a.secretKey)
+}
+
+func (a *AuthComposite) validateSessionToken(ctx context.Context, tokenStr string) (User, error) {
+	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return a.secretKey, nil
+	})
+	if err != nil {
+		return User{}, fmt.Errorf("invalid session token: %w", err)
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return User{}, fmt.Errorf("invalid session token claims")
+	}
+
+	userIDFloat, ok := claims["user_id"].(float64)
+	if !ok {
+		return User{}, fmt.Errorf("invalid user_id in session token")
+	}
+
+	user, err := a.repo.GetUserByID(ctx, int(userIDFloat))
+	if err != nil {
+		return User{}, fmt.Errorf("user not found for session token: %w", err)
+	}
+
+	return user, nil
+}
+
+func (a *AuthComposite) authenticate(w http.ResponseWriter, r *http.Request) (User, Tokens, error) {
+	tokens := Tokens{}
+
+	// Check self-login session cookie first
+	if sessionCookie, err := r.Cookie(sessionCookieName); err == nil {
+		tokens.Session = sessionCookie.Value
+	}
+
+	// Check OIDC cookies if configured
+	if a.oidc != nil {
+		idTokenCookie, err := r.Cookie(a.oidc.idTokenCookieName)
+		if err == nil {
+			tokens.ID = idTokenCookie.Value
+		}
+
+		refreshCookie, err := r.Cookie(a.oidc.refreshCookieName)
+		if err == nil {
+			tokens.Refresh = refreshCookie.Value
+		}
+	}
+
+	user, err := a.Authenticate(r.Context(), &tokens)
+	if err != nil {
+		return User{}, tokens, fmt.Errorf("not authenticated")
+	}
+
+	return user, tokens, nil
+}
+
+func (a *AuthComposite) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, tokens, err := a.authenticate(w, r)
+		if err != nil {
+			clearSessionCookie(w)
+			if a.oidc != nil && tokens.ID != "" {
+				a.oidc.logout(w, r)
+				return
+			}
+			// Not authenticated — redirect to login
+			slog.Debug("No authentication found, redirecting to login")
+			http.Redirect(w, r, a.loginEndpoint.Path(), http.StatusFound)
+			return
+		}
+		if a.oidc != nil {
+			a.oidc.setCookies(w, tokens)
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKeyUser, u)))
+	})
+}
+
+func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
+	// OIDC routes (callback + OIDC-specific logout)
+	if a.oidc != nil {
+		a.oidc.RegisterRoutes(m)
+	}
+
+	// Self-login endpoint
+	m.HandleFunc(a.loginEndpoint.Pattern(), func(w http.ResponseWriter, r *http.Request) {
+		_, _, err := a.authenticate(w, r)
+		if err == nil {
+			http.Redirect(w, r, a.baseURL, http.StatusFound)
 			return
 		}
 
-		if result.IDToken != "" {
-			setAuthCookie(w, a.idTokenCookieName, result.IDToken)
-		}
-		if result.RefreshToken != "" {
-			setAuthCookie(w, a.refreshCookieName, result.RefreshToken)
-		}
+		page := co.HTML5(
+			co.HTML5Props{
+				Title: "Sign in",
+				Head: []g.Node{
+					h.Link(h.Rel("stylesheet"), h.Href("/static/css/output.css")),
+				},
+				Body: []g.Node{
+					h.Div(
+						h.Class("min-h-screen flex items-center justify-center px-4"),
+						h.Div(
+							h.Class("w-full max-w-md"),
+							h.Div(
+								h.Class("text-center mb-8"),
+								h.H1(h.Class("text-3xl font-bold text-gray-900"), g.Text("Meetings -> Projektove")),
+								h.P(h.Class("mt-2 text-sm text-gray-500"), g.Text("Sign in to your account to continue")),
+							),
+							h.Div(
+								h.Class("bg-white shadow rounded-lg p-8"),
+								h.Form(
+									h.Method(a.authenticateEndpoint.method),
+									h.Action(a.authenticateEndpoint.Path()),
+									h.Class("space-y-6"),
+									h.Div(
+										h.Label(h.For("email"), h.Class("block text-sm font-medium text-gray-700 mb-1"), g.Text("Email")),
+										h.Input(
+											h.ID("email"),
+											h.Name("email"),
+											h.Type("email"),
+											h.Required(),
+											h.AutoComplete("email"),
+											h.Class("w-full px-3 py-2 border border-gray-300 rounded-md bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-transparent"),
+											h.Placeholder("you@example.com"),
+										),
+									),
+									h.Div(
+										h.Label(h.For("password"), h.Class("block text-sm font-medium text-gray-700 mb-1"), g.Text("Password")),
+										h.Input(
+											h.ID("password"),
+											h.Name("password"),
+											h.Type("password"),
+											h.Required(),
+											h.AutoComplete("current-password"),
+											h.Class("w-full px-3 py-2 border border-gray-300 rounded-md bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-transparent"),
+										),
+									),
+									h.Button(
+										h.Type("submit"),
+										h.Class("w-full rounded-md bg-gray-800 hover:bg-gray-900 text-white font-medium py-2 px-4 transition-colors cursor-pointer"),
+										g.Text("Sign in"),
+									),
+								),
+								g.Iff(a.oidc != nil, func() g.Node {
+									return g.Group([]g.Node{
+										h.Div(
+											h.Class("my-6 relative"),
+											h.Div(h.Class("absolute inset-0 flex items-center"), h.Div(h.Class("w-full border-t border-gray-200"))),
+											h.Div(h.Class("relative flex justify-center text-sm"), h.Span(h.Class("bg-white px-3 text-gray-500"), g.Text("or"))),
+										),
+										h.A(
+											h.Href(a.oidc.authCodeURL),
+											h.Class("w-full inline-flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium py-2 px-4 transition-colors cursor-pointer"),
+											g.Text("Sign in with SSO"),
+										),
+									})
+								}),
+							),
+							h.P(h.Class("mt-6 text-center text-xs text-gray-400"), g.Text("Meetings to Issues")),
+						),
+					),
+				},
+			},
+		)
 
-		slog.Debug("Authentication successful")
-
-		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
+		page.Render(w)
 	})
+
+	m.HandleFunc(a.authenticateEndpoint.Pattern(), func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "Invalid form submission", http.StatusBadRequest, err)
+			return
+		}
+
+		email := strings.TrimSpace(r.Form.Get("email"))
+		password := r.Form.Get("password")
+
+		user, err := a.repo.GetUser(r.Context(), email)
+		if err != nil || user.PasswordHash == nil {
+			slog.Error("User not found", "email", email)
+			WriteError(w, "Invalid email or password", http.StatusBadRequest, err)
+			return
+		}
+
+		if err := bcryptCompare([]byte(password), []byte(*user.PasswordHash)); err != nil {
+			slog.Error("Bad password", "email", email)
+			WriteError(w, "Invalid email or password", http.StatusBadRequest, err)
+			return
+		}
+
+		token, err := a.generateSessionToken(user.ID)
+		if err != nil {
+			WriteError(w, "Failed to create session", http.StatusInternalServerError, err)
+			return
+		}
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     sessionCookieName,
+			Value:    token,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   true,
+			MaxAge:   86400,
+		})
+
+		http.Redirect(w, r, a.baseURL, http.StatusFound)
+	})
+
+	// Self-login logout (clears session cookie)
+	m.HandleFunc(a.logoutEndpoint.Pattern(), func(w http.ResponseWriter, r *http.Request) {
+		clearSessionCookie(w)
+		if a.oidc != nil {
+			a.oidc.logout(w, r)
+			return
+		}
+		http.Redirect(w, r, a.loginEndpoint.Path(), http.StatusFound)
+	})
+}
+
+func clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Path:     "/",
+		Value:    "",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+	})
+}
+
+func bcryptCompare(password, hash []byte) error {
+	return bcrypt.CompareHashAndPassword(hash, password)
+}
+
+func HashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", fmt.Errorf("when hashing password: %w", err)
+	}
+	return string(hash), nil
 }
