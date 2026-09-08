@@ -9,6 +9,7 @@ ARG VERSION
 COPY cmd cmd
 COPY *.go .
 COPY static static
+COPY migrations migrations
 COPY Makefile .
 
 RUN VERSION=$VERSION make bin/app
