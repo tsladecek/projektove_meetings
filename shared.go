@@ -5,8 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 func CurrentTime() time.Time {
@@ -14,7 +13,7 @@ func CurrentTime() time.Time {
 }
 
 func newUUID() string {
-	return uuid.NewString()
+	return uuid.NewV4().String()
 }
 
 func WriteError(w http.ResponseWriter, message string, status int, err error) {

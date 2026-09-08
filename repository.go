@@ -3,6 +3,7 @@ package projektovemeeting
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	sqliteMigrate "github.com/golang-migrate/migrate/v4/database/sqlite"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "modernc.org/sqlite"
 )
 
@@ -60,12 +62,21 @@ func (txp TxProvider) Transact(tf func(db Repository) error) error {
 	})
 }
 
+//go:embed migrations
+var migrations embed.FS
+
 func RunMigrations(db *sql.DB) error {
+	d, err := iofs.New(migrations, "migrations/sqlite")
+	if err != nil {
+		return fmt.Errorf("when creating iofs driver: %w", err)
+	}
+
 	driver, err := sqliteMigrate.WithInstance(db, &sqliteMigrate.Config{})
 	if err != nil {
 		return fmt.Errorf("when constructing sqlite instance: %w", err)
 	}
-	m, err := migrate.NewWithDatabaseInstance("file://migrations/sqlite", "sqlite", driver)
+
+	m, err := migrate.NewWithInstance("iofs", d, "sqlite", driver)
 	if err != nil {
 		return fmt.Errorf("when constructing migration: %w", err)
 	}
