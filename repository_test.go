@@ -1088,6 +1088,51 @@ func TestGetProjektoveOrganization(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
 }
 
+func TestGetProjektoveOrganizationByName(t *testing.T) {
+	repo := newRepository(t)
+
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	got, err := repo.GetProjektoveOrganizationByName(t.Context(), "acme")
+	require.NoError(t, err)
+	assert.Equal(t, id, got.ID)
+	assert.Equal(t, "acme", got.Name)
+
+	_, err = repo.GetProjektoveOrganizationByName(t.Context(), "missing")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
+}
+
+func TestStoreUserProjectoveOrganization(t *testing.T) {
+	repo := newRepository(t)
+
+	user := storeUser(t, repo, "user@example.com")
+
+	orgID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	uuid, err := repo.StoreUserProjectoveOrganization(t.Context(), user.ID, orgID, "tok1")
+	require.NoError(t, err)
+	require.NotEmpty(t, uuid)
+
+	orgs, err := repo.ListUserProjektoveOrganizations(t.Context(), user.ID)
+	require.NoError(t, err)
+	require.Len(t, orgs, 1)
+	assert.Equal(t, orgID, orgs[0].OrganizationID)
+	assert.Equal(t, "tok1", orgs[0].Token)
+	assert.Equal(t, uuid, orgs[0].UUID)
+
+	uuid2, err := repo.StoreUserProjectoveOrganization(t.Context(), user.ID, orgID, "tok2")
+	require.NoError(t, err)
+	assert.Equal(t, uuid, uuid2)
+
+	orgs, err = repo.ListUserProjektoveOrganizations(t.Context(), user.ID)
+	require.NoError(t, err)
+	require.Len(t, orgs, 1)
+	assert.Equal(t, "tok2", orgs[0].Token)
+}
+
 func TestUpdateProjektoveOrganization(t *testing.T) {
 	repo := newRepository(t)
 

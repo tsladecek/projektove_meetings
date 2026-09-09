@@ -181,7 +181,7 @@ func TestAdminAddOrgUser_AddsUser(t *testing.T) {
 	require.NoError(t, err)
 
 	rec := adminRequest(handler, auth, admin, http.MethodPost, "/api/admin/organizations/"+strconv.Itoa(orgID)+"/users", url.Values{
-		"name":         {"jane"},
+		"name":          {"jane"},
 		"projektove_id": {"42"},
 	}.Encode())
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -273,4 +273,64 @@ func TestUserPage_RendersModelSelect(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), `value="openai/gpt-4o"`)
 	assert.Contains(t, rec.Body.String(), `name="model"`)
+}
+
+func TestAddOrganization_Valid(t *testing.T) {
+	repo := newRepository(t)
+	handler, auth, user, _ := newAdminTestServer(t, repo)
+	_, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	rec := adminRequest(handler, auth, user, http.MethodPost, "/api/organizations", url.Values{
+		"organization": {"acme"},
+		"token":        {"secret-token"},
+	}.Encode())
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `name="org_name"`)
+	assert.Contains(t, rec.Body.String(), `value="acme"`)
+	assert.Contains(t, rec.Body.String(), `value="secret-token"`)
+}
+
+func TestAddOrganization_Unknown(t *testing.T) {
+	repo := newRepository(t)
+	handler, auth, user, _ := newAdminTestServer(t, repo)
+
+	rec := adminRequest(handler, auth, user, http.MethodPost, "/api/organizations", url.Values{
+		"organization": {"missing"},
+		"token":        {"secret-token"},
+	}.Encode())
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestUpdateUser_SavesNewOrganization(t *testing.T) {
+	repo := newRepository(t)
+	handler, auth, user, _ := newAdminTestServer(t, repo)
+	_, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	rec := adminRequest(handler, auth, user, http.MethodPut, "/api/user", url.Values{
+		"org_name":  {"acme"},
+		"org_token": {"org-token"},
+		"org_uuid":  {""},
+	}.Encode())
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	orgs, err := repo.ListUserProjektoveOrganizations(t.Context(), user.ID)
+	require.NoError(t, err)
+	require.Len(t, orgs, 1)
+	assert.Equal(t, "acme", orgs[0].OrgName)
+	assert.Equal(t, "org-token", orgs[0].Token)
+}
+
+func TestUserPage_RendersOrgSelect(t *testing.T) {
+	repo := newRepository(t)
+	handler, auth, user, _ := newAdminTestServer(t, repo)
+	_, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	rec := adminRequest(handler, auth, user, http.MethodGet, "/user", "")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `name="organization"`)
+	assert.Contains(t, rec.Body.String(), `value="acme"`)
+	assert.Contains(t, rec.Body.String(), `id="add-organization-form"`)
 }

@@ -895,6 +895,73 @@ func TestControllerGetUserProfile_NoAvailableModels(t *testing.T) {
 	assert.Empty(t, profile.AvailableModels)
 }
 
+func TestControllerGetUserProfile_AvailableOrganizations(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+	profile, err := c.GetUserProfile(t.Context(), user)
+	require.NoError(t, err)
+	require.Len(t, profile.AvailableOrganizations, 1)
+	assert.Equal(t, id, profile.AvailableOrganizations[0].ID)
+	assert.Equal(t, "acme", profile.AvailableOrganizations[0].Name)
+}
+
+func TestControllerUpdateUser_AddsNewOrganization(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	orgID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+	err = c.UpdateUser(t.Context(), user, UserUpdateView{
+		Organizations: []UserOrgTokenView{
+			{OrganizationName: "acme", Token: "org-token"},
+		},
+	})
+	require.NoError(t, err)
+
+	orgs, err := repo.ListUserProjektoveOrganizations(t.Context(), user.ID)
+	require.NoError(t, err)
+	require.Len(t, orgs, 1)
+	assert.Equal(t, orgID, orgs[0].OrganizationID)
+	assert.Equal(t, "org-token", orgs[0].Token)
+}
+
+func TestControllerUpdateUser_SkipsEmptyOrganizationName(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	c := Controller{Repository: repo}
+	require.NoError(t, c.UpdateUser(t.Context(), user, UserUpdateView{
+		Organizations: []UserOrgTokenView{
+			{OrganizationName: "", Token: "org-token"},
+		},
+	}))
+
+	orgs, err := repo.ListUserProjektoveOrganizations(t.Context(), user.ID)
+	require.NoError(t, err)
+	assert.Empty(t, orgs)
+}
+
+func TestControllerResolveProjectoveOrganization(t *testing.T) {
+	repo := newRepository(t)
+	c := Controller{Repository: repo}
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	org, err := c.ResolveProjectoveOrganization(t.Context(), "acme")
+	require.NoError(t, err)
+	assert.Equal(t, id, org.ID)
+
+	_, err = c.ResolveProjectoveOrganization(t.Context(), "missing")
+	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
+}
+
 func TestControllerListAdminOrganizations(t *testing.T) {
 	repo := newRepository(t)
 	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")

@@ -51,9 +51,9 @@ type UserUpdate struct {
 }
 
 type ProjectsCacheEntry struct {
-	Projects                  []ProjektoveProject
-	FetchedAt                 time.Time
-	UserProjektoveOrgID       int
+	Projects            []ProjektoveProject
+	FetchedAt           time.Time
+	UserProjektoveOrgID int
 }
 
 type LLMContextCreate struct {
@@ -62,15 +62,15 @@ type LLMContextCreate struct {
 }
 
 type PromptCreate struct {
-	Prompt                        string
-	Result                        string
-	Error                         error
-	ContextID                     int
-	Status                        PromptStatus
-	ModelID                       int
-	FileContent                   string
-	CreatedAt                     time.Time
-	UserProjektoveOrganizationID  int
+	Prompt                       string
+	Result                       string
+	Error                        error
+	ContextID                    int
+	Status                       PromptStatus
+	ModelID                      int
+	FileContent                  string
+	CreatedAt                    time.Time
+	UserProjektoveOrganizationID int
 }
 
 type PromptComplete struct {
@@ -100,11 +100,12 @@ type ContextView struct {
 }
 
 type UserProfileView struct {
-	Email           string
-	Models          []UserModelView
-	AvailableModels []Model
-	Organizations   []UserOrgView
-	Contexts        []ContextView
+	Email                  string
+	Models                 []UserModelView
+	AvailableModels        []Model
+	Organizations          []UserOrgView
+	AvailableOrganizations []ProjektoveOrganization
+	Contexts               []ContextView
 }
 
 type UserUpdateView struct {
@@ -113,8 +114,9 @@ type UserUpdateView struct {
 }
 
 type UserOrgTokenView struct {
-	ID    string
-	Token string
+	ID               string
+	OrganizationName string
+	Token            string
 }
 
 type IssueView struct {
@@ -194,9 +196,9 @@ type BatchView struct {
 }
 
 type AdminOrganizationView struct {
-	ID       int
-	Name     string
-	APIURL   string
+	ID         int
+	Name       string
+	APIURL     string
 	BrowserURL string
-	Users    []ProjektoveOrganizationUser
+	Users      []ProjektoveOrganizationUser
 }

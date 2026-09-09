@@ -66,9 +66,11 @@ type Repository interface {
 	GetUserProjektoveOrganization(ctx context.Context, uuid string) (UserProjektoveOrganization, error)
 	GetUserProjektoveOrganizationByID(ctx context.Context, id int) (UserProjektoveOrganization, error)
 	UpdateUserOrganizationToken(ctx context.Context, userID int, uuid string, token string) error
+	StoreUserProjectoveOrganization(ctx context.Context, userID int, orgID int, token string) (string, error)
 	ListOrganizationUsers(ctx context.Context, orgID int) ([]ProjektoveOrganizationUser, error)
 	ListProjektoveOrganizations(ctx context.Context) ([]ProjektoveOrganization, error)
 	GetProjektoveOrganization(ctx context.Context, id int) (ProjektoveOrganization, error)
+	GetProjektoveOrganizationByName(ctx context.Context, name string) (ProjektoveOrganization, error)
 	StoreProjektoveOrganization(ctx context.Context, name, apiURL, browserURL string) (int, error)
 	UpdateProjektoveOrganization(ctx context.Context, id int, name, apiURL, browserURL string) error
 	StoreOrganizationUser(ctx context.Context, orgID int, name string, projektoveID int) error

@@ -3,6 +3,7 @@ package projektovemeeting
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -211,6 +212,12 @@ func (c Controller) GetUserProfile(ctx context.Context, user User) (UserProfileV
 	}
 	profile.AvailableModels = availableModels
 
+	availableOrganizations, err := c.Repository.ListProjektoveOrganizations(ctx)
+	if err != nil {
+		return UserProfileView{}, fmt.Errorf("when listing available organizations: %w", err)
+	}
+	profile.AvailableOrganizations = availableOrganizations
+
 	orgs, err := c.Repository.ListUserProjektoveOrganizations(ctx, user.ID)
 	if err != nil {
 		return UserProfileView{}, fmt.Errorf("when listing user organizations: %w", err)
@@ -267,6 +274,19 @@ func (c Controller) UpdateUser(ctx context.Context, user User, v UserUpdateView)
 
 	for _, o := range v.Organizations {
 		if o.ID == "" {
+			if o.OrganizationName == "" {
+				continue
+			}
+			org, err := c.Repository.GetProjektoveOrganizationByName(ctx, o.OrganizationName)
+			if err != nil {
+				if errors.Is(err, ErrOrganizationNotFound) {
+					continue
+				}
+				return fmt.Errorf("when getting organization by name: %w", err)
+			}
+			if _, err := c.Repository.StoreUserProjectoveOrganization(ctx, user.ID, org.ID, o.Token); err != nil {
+				return fmt.Errorf("when storing user organization: %w", err)
+			}
 			continue
 		}
 		if err := c.Repository.UpdateUserOrganizationToken(ctx, user.ID, o.ID, o.Token); err != nil {
@@ -275,6 +295,14 @@ func (c Controller) UpdateUser(ctx context.Context, user User, v UserUpdateView)
 	}
 
 	return nil
+}
+
+func (c Controller) ResolveProjectoveOrganization(ctx context.Context, name string) (ProjektoveOrganization, error) {
+	org, err := c.Repository.GetProjektoveOrganizationByName(ctx, name)
+	if err != nil {
+		return ProjektoveOrganization{}, fmt.Errorf("when resolving organization by name: %w", err)
+	}
+	return org, nil
 }
 
 func (c Controller) AddUserModel(ctx context.Context, user User, provider, model, token string) error {

@@ -862,6 +862,27 @@ func (r *RepositorySqlite) UpdateUserOrganizationToken(ctx context.Context, user
 	return nil
 }
 
+func (r *RepositorySqlite) StoreUserProjectoveOrganization(ctx context.Context, userID int, orgID int, token string) (string, error) {
+	var existingUUID string
+	err := r.DB.QueryRowContext(ctx, "SELECT uuid FROM users_projektove_organizations WHERE user_id = ? AND organization_id = ?", userID, orgID).Scan(&existingUUID)
+	if err == nil {
+		if _, err := r.DB.ExecContext(ctx, "UPDATE users_projektove_organizations SET token = ? WHERE uuid = ? AND user_id = ?", token, existingUUID, userID); err != nil {
+			return "", fmt.Errorf("failed to update existing user organization token: %w", err)
+		}
+		return existingUUID, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("failed to check user organization: %w", err)
+	}
+
+	uuid := newUUID()
+	if _, err := r.DB.ExecContext(ctx, "INSERT INTO users_projektove_organizations (uuid, user_id, organization_id, token) VALUES (?, ?, ?, ?)", uuid, userID, orgID, token); err != nil {
+		return "", fmt.Errorf("failed to insert user organization: %w", err)
+	}
+
+	return uuid, nil
+}
+
 func (r *RepositorySqlite) ListOrganizationUsers(ctx context.Context, orgID int) ([]ProjektoveOrganizationUser, error) {
 	users := []ProjektoveOrganizationUser{}
 
@@ -932,6 +953,19 @@ func (r *RepositorySqlite) GetProjektoveOrganization(ctx context.Context, id int
 			return ProjektoveOrganization{}, ErrOrganizationNotFound
 		}
 		return ProjektoveOrganization{}, fmt.Errorf("when getting projektove organization: %w", err)
+	}
+
+	return o, nil
+}
+
+func (r *RepositorySqlite) GetProjektoveOrganizationByName(ctx context.Context, name string) (ProjektoveOrganization, error) {
+	o := ProjektoveOrganization{}
+	err := r.DB.QueryRowContext(ctx, "SELECT id, name, api_url, browser_url FROM projektove_organizations WHERE name = ?", name).Scan(&o.ID, &o.Name, &o.APIURL, &o.BrowserURL)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ProjektoveOrganization{}, ErrOrganizationNotFound
+		}
+		return ProjektoveOrganization{}, fmt.Errorf("when getting projektove organization by name: %w", err)
 	}
 
 	return o, nil

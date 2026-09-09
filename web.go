@@ -51,10 +51,11 @@ type endpoints struct {
 	adminModels          Endpoint
 
 	// api - should have /api prefix
-	updateUser    Endpoint
-	addContext    Endpoint
-	deleteContext Endpoint
-	addLLMModel   Endpoint
+	updateUser      Endpoint
+	addContext      Endpoint
+	deleteContext   Endpoint
+	addLLMModel     Endpoint
+	addOrganization Endpoint
 
 	listContexts Endpoint
 	createPrompt Endpoint
@@ -111,14 +112,15 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 		adminOrganizations:   end(http.MethodGet, "/admin/organizations"),
 		adminNewOrganization: end(http.MethodGet, "/admin/organizations/new"),
 		adminOrganization:    end(http.MethodGet, "/admin/organizations/{id}"),
-		adminModels: end(http.MethodGet, "/admin/models"),
+		adminModels:          end(http.MethodGet, "/admin/models"),
 
 		// api
 
-		updateUser:    endAPI(http.MethodPut, "/user"),
-		addContext:    endAPI(http.MethodPost, "/contexts"),
-		addLLMModel:   endAPI(http.MethodPost, "/models"),
-		deleteContext: endAPI(http.MethodDelete, "/contexts/{id}"),
+		updateUser:      endAPI(http.MethodPut, "/user"),
+		addContext:      endAPI(http.MethodPost, "/contexts"),
+		addLLMModel:     endAPI(http.MethodPost, "/models"),
+		addOrganization: endAPI(http.MethodPost, "/organizations"),
+		deleteContext:   endAPI(http.MethodDelete, "/contexts/{id}"),
 
 		listContexts: endAPI(http.MethodGet, "/contexts"),
 		createPrompt: endAPI(http.MethodPost, "/prompts"),
@@ -163,6 +165,7 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 		{endpoint: e.addContext, handler: a.addContext()},
 		{endpoint: e.deleteContext, handler: a.deleteContext()},
 		{endpoint: e.addLLMModel, handler: a.addLLMModel()},
+		{endpoint: e.addOrganization, handler: a.addOrganization()},
 		{endpoint: e.listContexts, handler: a.listContexts()},
 		{endpoint: e.createPrompt, handler: a.createPrompt()},
 		{endpoint: e.createBatch, handler: a.createBatch()},
@@ -711,13 +714,18 @@ func (a api) updateUser() http.HandlerFunc {
 		}
 
 		orgUUIDs := r.Form["org_uuid"]
+		orgNames := r.Form["org_name"]
 		orgTokens := r.Form["org_token"]
 		for i := range orgUUIDs {
 			token := ""
+			name := ""
 			if i < len(orgTokens) {
 				token = orgTokens[i]
 			}
-			v.Organizations = append(v.Organizations, UserOrgTokenView{ID: orgUUIDs[i], Token: token})
+			if i < len(orgNames) {
+				name = orgNames[i]
+			}
+			v.Organizations = append(v.Organizations, UserOrgTokenView{ID: orgUUIDs[i], OrganizationName: name, Token: token})
 		}
 
 		if err := a.controller.UpdateUser(r.Context(), user, v); err != nil {
@@ -798,6 +806,34 @@ func (a api) addLLMModel() http.HandlerFunc {
 			Token:    r.Form.Get("token"),
 		}
 		a.components.ModelRow(m).Render(w)
+	}
+}
+
+func (a api) addOrganization() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		orgName := r.Form.Get("organization")
+		if strings.TrimSpace(orgName) == "" {
+			WriteError(w, "invalid organization selection", http.StatusBadRequest, nil)
+			return
+		}
+
+		org, err := a.controller.ResolveProjectoveOrganization(r.Context(), orgName)
+		if err != nil {
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "invalid organization selection", http.StatusBadRequest, err)
+				return
+			}
+			WriteError(w, "failed to resolve organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		o := UserOrgView{Name: org.Name, Token: r.Form.Get("token")}
+		a.components.OrgRow(o).Render(w)
 	}
 }
 
@@ -1811,6 +1847,23 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 		modelOpts = append([]g.Node{h.Option(h.Value(""), h.Disabled(), h.Selected(), g.Text("Select model"))}, modelOpts...)
 	}
 
+	orgOpts := []g.Node{}
+	linkedOrgs := map[string]bool{}
+	for _, o := range profile.Organizations {
+		linkedOrgs[o.Name] = true
+	}
+	for _, o := range profile.AvailableOrganizations {
+		if linkedOrgs[o.Name] {
+			continue
+		}
+		orgOpts = append(orgOpts, h.Option(h.Value(o.Name), g.Text(o.Name)))
+	}
+	if len(orgOpts) == 0 {
+		orgOpts = append(orgOpts, h.Option(h.Value(""), h.Disabled(), g.Text("No organizations available")))
+	} else {
+		orgOpts = append([]g.Node{h.Option(h.Value(""), h.Disabled(), h.Selected(), g.Text("Select organization"))}, orgOpts...)
+	}
+
 	return h.Div(
 		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("User")),
 
@@ -1836,6 +1889,19 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 			),
 
 			c.SaveButton(h.Type("submit")),
+		),
+
+		h.Form(
+			h.ID("add-organization-form"),
+			h.Method("post"),
+			htmx.Post(c.endpoints.addOrganization.Path()),
+			htmx.Target("#organizations-list"),
+			htmx.Swap("beforeend"),
+			htmx.On("htmx:after:request", "this.reset()"),
+			h.Class("grid grid-rows-3 lg:grid-cols-[1fr_1fr_auto] gap-2 mt-4"),
+			h.Select(h.Name("organization"), h.Class("px-2 py-1 border rounded"), h.Required(), g.Group(orgOpts)),
+			h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
+			c.AddButton("Add organization", h.Type("submit")),
 		),
 
 		h.Form(
@@ -2375,6 +2441,7 @@ func (c components) OrgRow(o UserOrgView) g.Node {
 	return h.Div(
 		h.Class("org-row flex gap-2 items-center border rounded px-3 py-2 overflow-auto"),
 		h.Input(h.Type("hidden"), h.Name("org_uuid"), h.Value(o.ID)),
+		h.Input(h.Type("hidden"), h.Name("org_name"), h.Value(o.Name)),
 		h.Span(h.Class("flex-1 font-medium"), g.Text(o.Name)),
 		h.Input(h.Type("text"), h.Name("org_token"), h.Value(o.Token), h.Placeholder("token"), h.Class("flex-1 px-2 py-1 border rounded")),
 	)
