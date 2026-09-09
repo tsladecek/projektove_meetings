@@ -133,8 +133,11 @@ func TestAdminModelsPage_AdminOK(t *testing.T) {
 	rec := adminRequest(handler, auth, admin, http.MethodGet, "/admin/models", "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Models")
-	assert.Contains(t, rec.Body.String(), "Provider")
 	assert.Contains(t, rec.Body.String(), "admin-models-list")
+	assert.Contains(t, rec.Body.String(), "add-provider-form")
+	assert.Contains(t, rec.Body.String(), "add-model-form")
+	assert.Contains(t, rec.Body.String(), `name="provider"`)
+	assert.Contains(t, rec.Body.String(), "No providers yet")
 }
 
 func TestAdminOrganizationDetail_AdminOK(t *testing.T) {
@@ -233,6 +236,52 @@ func TestAdminCreateModel_AdminCreates(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, models, 1)
 	assert.Equal(t, "gpt-4o", models[0].Model)
+}
+
+func TestAdminCreateProvider_AdminCreates(t *testing.T) {
+	repo := newRepository(t)
+	handler, auth, _, admin := newAdminTestServer(t, repo)
+
+	rec := adminRequest(handler, auth, admin, http.MethodPost, "/api/admin/providers", url.Values{
+		"provider": {"openai"},
+	}.Encode())
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "Success!", rec.Header().Get("X-Toast"))
+	assert.Contains(t, rec.Body.String(), "admin-models-content")
+	assert.Contains(t, rec.Body.String(), `value="openai"`)
+
+	providers, err := repo.ListProviders(t.Context())
+	require.NoError(t, err)
+	require.Len(t, providers, 1)
+	assert.Equal(t, "openai", providers[0].Provider)
+}
+
+func TestAdminCreateProvider_Invalid(t *testing.T) {
+	repo := newRepository(t)
+	handler, auth, _, admin := newAdminTestServer(t, repo)
+
+	rec := adminRequest(handler, auth, admin, http.MethodPost, "/api/admin/providers", url.Values{
+		"provider": {""},
+	}.Encode())
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "Provider is required", rec.Header().Get("X-Error"))
+}
+
+func TestAdminCreateProvider_Duplicate(t *testing.T) {
+	repo := newRepository(t)
+	handler, auth, _, admin := newAdminTestServer(t, repo)
+	_, err := repo.GetOrCreateProvider(t.Context(), "openai")
+	require.NoError(t, err)
+
+	rec := adminRequest(handler, auth, admin, http.MethodPost, "/api/admin/providers", url.Values{
+		"provider": {"openai"},
+	}.Encode())
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "Provider already exists", rec.Header().Get("X-Error"))
+
+	providers, err := repo.ListProviders(t.Context())
+	require.NoError(t, err)
+	require.Len(t, providers, 1)
 }
 
 func TestAddLLMModel_SelectValueSplitsProviderModel(t *testing.T) {

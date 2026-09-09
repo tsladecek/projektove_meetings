@@ -919,6 +919,29 @@ func (c Controller) ListAdminModels(ctx context.Context) ([]Provider, []Model, e
 	return providers, models, nil
 }
 
+func (c Controller) CreateProvider(ctx context.Context, provider string) error {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return fmt.Errorf("provider is required: %w", ErrInvalidArgument)
+	}
+
+	providers, err := c.Repository.ListProviders(ctx)
+	if err != nil {
+		return fmt.Errorf("when listing providers: %w", err)
+	}
+	for _, p := range providers {
+		if strings.EqualFold(p.Provider, provider) {
+			return fmt.Errorf("%w: %s", ErrProviderExists, provider)
+		}
+	}
+
+	if _, err := c.Repository.GetOrCreateProvider(ctx, provider); err != nil {
+		return fmt.Errorf("when creating provider: %w", err)
+	}
+
+	return nil
+}
+
 func (c Controller) CreateModel(ctx context.Context, provider, model string) error {
 	if strings.TrimSpace(provider) == "" || strings.TrimSpace(model) == "" {
 		return fmt.Errorf("provider and model are required: %w", ErrInvalidArgument)

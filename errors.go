@@ -19,6 +19,7 @@ var (
 	ErrIssueIgnored                       = errors.New("issue is ignored")
 	ErrModelNotFound                      = errors.New("model not found")
 	ErrUserModelNotFound                  = errors.New("user model not found")
+	ErrProviderExists                     = errors.New("provider already exists")
 	ErrParentDoesNotBelongToUser          = errors.New("parent does not belong to user")
 	ErrIssueIncomplete                    = errors.New("issue is missing required fields")
 	ErrProjektoveTokenNotConfigured       = errors.New("projektove token is not configured")

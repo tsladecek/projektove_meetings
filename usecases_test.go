@@ -1093,3 +1093,24 @@ func TestControllerCreateModel(t *testing.T) {
 	err = c.CreateModel(t.Context(), "", "gpt-4o")
 	assert.True(t, errors.Is(err, ErrInvalidArgument))
 }
+
+func TestControllerCreateProvider(t *testing.T) {
+	repo := newRepository(t)
+	c := Controller{Repository: repo}
+
+	require.NoError(t, c.CreateProvider(t.Context(), "openai"))
+
+	providers, err := repo.ListProviders(t.Context())
+	require.NoError(t, err)
+	require.Len(t, providers, 1)
+	assert.Equal(t, "openai", providers[0].Provider)
+
+	err = c.CreateProvider(t.Context(), "  openai  ")
+	assert.True(t, errors.Is(err, ErrProviderExists))
+
+	err = c.CreateProvider(t.Context(), "OPENAI")
+	assert.True(t, errors.Is(err, ErrProviderExists))
+
+	err = c.CreateProvider(t.Context(), "")
+	assert.True(t, errors.Is(err, ErrInvalidArgument))
+}

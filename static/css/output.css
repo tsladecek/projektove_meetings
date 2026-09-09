@@ -347,6 +347,9 @@
   .min-w-0 {
     min-width: calc(var(--spacing) * 0);
   }
+  .min-w-48 {
+    min-width: calc(var(--spacing) * 48);
+  }
   .flex-1 {
     flex: 1;
   }
@@ -367,6 +370,9 @@
   }
   .grid-cols-2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .grid-cols-\[1fr_1fr_auto\] {
+    grid-template-columns: 1fr 1fr auto;
   }
   .grid-rows-3 {
     grid-template-rows: repeat(3, minmax(0, 1fr));

@@ -70,6 +70,7 @@ type endpoints struct {
 	adminUpdateOrganization Endpoint
 	adminAddOrgUser         Endpoint
 	adminRemoveOrgUser      Endpoint
+	adminCreateProvider     Endpoint
 	adminCreateModel        Endpoint
 }
 
@@ -135,6 +136,7 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 		adminUpdateOrganization: endAPI(http.MethodPost, "/admin/organizations/{id}"),
 		adminAddOrgUser:         endAPI(http.MethodPost, "/admin/organizations/{id}/users"),
 		adminRemoveOrgUser:      endAPI(http.MethodDelete, "/admin/organizations/{id}/users/{uid}"),
+		adminCreateProvider:     endAPI(http.MethodPost, "/admin/providers"),
 		adminCreateModel:        endAPI(http.MethodPost, "/admin/models"),
 	}
 
@@ -189,6 +191,7 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 		{endpoint: e.adminUpdateOrganization, handler: a.adminUpdateOrganization()},
 		{endpoint: e.adminAddOrgUser, handler: a.adminAddOrgUser()},
 		{endpoint: e.adminRemoveOrgUser, handler: a.adminRemoveOrgUser()},
+		{endpoint: e.adminCreateProvider, handler: a.adminCreateProvider()},
 		{endpoint: e.adminCreateModel, handler: a.adminCreateModel()},
 	} {
 		m.Handle(eh.endpoint.Pattern(), auth.Middleware(requireAdmin(eh.handler)))
@@ -638,6 +641,35 @@ func (a api) adminRemoveOrgUser() http.HandlerFunc {
 			return
 		}
 		a.components.AdminOrgUsersList(view.Users, id).Render(w)
+	}
+}
+
+func (a api) adminCreateProvider() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		if err := a.controller.CreateProvider(r.Context(), r.Form.Get("provider")); err != nil {
+			if errors.Is(err, ErrProviderExists) {
+				w.Header().Set("X-Error", "Provider already exists")
+			} else if errors.Is(err, ErrInvalidArgument) {
+				w.Header().Set("X-Error", "Provider is required")
+			} else {
+				WriteError(w, "failed to create provider", http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			withSuccessToast(w)
+		}
+
+		providers, models, err := a.controller.ListAdminModels(r.Context())
+		if err != nil {
+			WriteError(w, "failed to load models", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.AdminModelsContent(providers, models).Render(w)
 	}
 }
 
@@ -1752,34 +1784,71 @@ func (c components) AdminModelsPage(providers []Provider, models []Model, valida
 	}
 
 	nodes = append(nodes,
-		c.AdminModelsForm(),
-		c.AdminModelsList(providers, models),
+		c.AdminModelsContent(providers, models),
 	)
 
 	return h.Div(g.Group(nodes))
 }
 
-func (c components) AdminModelsForm() g.Node {
+func (c components) AdminModelsContent(providers []Provider, models []Model) g.Node {
+	return h.Div(
+		h.ID("admin-models-content"),
+		h.Class("space-y-6"),
+		c.AdminProviderForm(),
+		c.AdminModelsForm(providers),
+		c.AdminModelsList(providers, models),
+	)
+}
+
+func (c components) AdminProviderForm() g.Node {
 	return h.Form(
+		h.ID("add-provider-form"),
+		h.Method("post"),
+		htmx.Post(c.endpoints.adminCreateProvider.Path()),
+		htmx.Target("#admin-models-content"),
+		htmx.Swap("outerHTML"),
+		h.Class("flex gap-2 items-end max-w-2xl"),
+		h.Div(
+			h.Class("space-y-1 flex-1"),
+			h.Label(h.Class("block text-sm font-medium"), g.Text("New provider")),
+			h.Input(h.Name("provider"), h.Placeholder("e.g. openai"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+		),
+		c.AddButton("Add provider", h.Type("submit")),
+	)
+}
+
+func (c components) AdminModelsForm(providers []Provider) g.Node {
+	opts := []g.Node{}
+	for _, p := range providers {
+		opts = append(opts, h.Option(h.Value(p.Provider), g.Text(p.Provider)))
+	}
+	if len(opts) == 0 {
+		opts = append(opts, h.Option(h.Value(""), h.Disabled(), g.Text("No providers yet")))
+	} else {
+		opts = append([]g.Node{h.Option(h.Value(""), h.Disabled(), h.Selected(), g.Text("Select provider"))}, opts...)
+	}
+
+	return h.Form(
+		h.ID("add-model-form"),
 		h.Method("post"),
 		htmx.Post(c.endpoints.adminCreateModel.Path()),
 		htmx.Target("#admin-models-list"),
 		htmx.Swap("outerHTML"),
 		htmx.On("htmx:after:request", "this.reset()"),
-		h.Class("space-y-6 max-w-2xl mb-8"),
 		h.Div(
-			h.Class("space-y-2"),
-			h.Label(h.Class("block text-sm font-medium"), g.Text("Provider")),
-			h.Input(h.Name("provider"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
-			h.P(h.Class("text-sm text-gray-500"), g.Text("e.g. openai. If the provider does not exist yet it will be created.")),
+			h.Class("flex flex-wrap gap-2 items-end max-w-2xl"),
+			h.Div(
+				h.Class("space-y-1"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Provider")),
+				h.Select(h.Name("provider"), h.Required(), h.Class("px-3 py-2 border rounded min-w-48"), g.Group(opts)),
+			),
+			h.Div(
+				h.Class("space-y-1"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Model")),
+				h.Input(h.Name("model"), h.Placeholder("e.g. gpt-4o"), h.Required(), h.Class("px-3 py-2 border rounded")),
+			),
+			c.AddButton("Add model", h.Type("submit")),
 		),
-		h.Div(
-			h.Class("space-y-2"),
-			h.Label(h.Class("block text-sm font-medium"), g.Text("Model")),
-			h.Input(h.Name("model"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
-			h.P(h.Class("text-sm text-gray-500"), g.Text("e.g. gpt-4o")),
-		),
-		c.SaveButton(h.Type("submit")),
 	)
 }
 
