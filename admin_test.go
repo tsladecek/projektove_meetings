@@ -133,6 +133,8 @@ func TestAdminModelsPage_AdminOK(t *testing.T) {
 	rec := adminRequest(handler, auth, admin, http.MethodGet, "/admin/models", "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Models")
+	assert.Contains(t, rec.Body.String(), "Provider")
+	assert.Contains(t, rec.Body.String(), "admin-models-list")
 }
 
 func TestAdminOrganizationDetail_AdminOK(t *testing.T) {
@@ -219,7 +221,8 @@ func TestAdminCreateModel_AdminCreates(t *testing.T) {
 		"provider": {"openai"},
 		"model":    {"gpt-4o"},
 	}.Encode())
-	assert.Equal(t, http.StatusSeeOther, rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "gpt-4o")
 
 	providers, err := repo.ListProviders(t.Context())
 	require.NoError(t, err)

@@ -49,7 +49,6 @@ type endpoints struct {
 	adminNewOrganization Endpoint
 	adminOrganization    Endpoint
 	adminModels          Endpoint
-	adminNewModel        Endpoint
 
 	// api - should have /api prefix
 	updateUser    Endpoint
@@ -112,8 +111,7 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 		adminOrganizations:   end(http.MethodGet, "/admin/organizations"),
 		adminNewOrganization: end(http.MethodGet, "/admin/organizations/new"),
 		adminOrganization:    end(http.MethodGet, "/admin/organizations/{id}"),
-		adminModels:          end(http.MethodGet, "/admin/models"),
-		adminNewModel:        end(http.MethodGet, "/admin/models/new"),
+		adminModels: end(http.MethodGet, "/admin/models"),
 
 		// api
 
@@ -182,7 +180,6 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 		{endpoint: e.adminNewOrganization, handler: a.adminNewOrganization()},
 		{endpoint: e.adminOrganization, handler: a.adminOrganization()},
 		{endpoint: e.adminModels, handler: a.adminModels()},
-		{endpoint: e.adminNewModel, handler: a.adminNewModel()},
 
 		// admin api
 		{endpoint: e.adminCreateOrganization, handler: a.adminCreateOrganization()},
@@ -503,13 +500,7 @@ func (a api) adminModels() http.HandlerFunc {
 			WriteError(w, "failed to load models", http.StatusInternalServerError, err)
 			return
 		}
-		a.page(w, r, a.components.AdminModelsPage(providers, models))
-	}
-}
-
-func (a api) adminNewModel() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		a.page(w, r, a.components.AdminNewModelPage(nil))
+		a.page(w, r, a.components.AdminModelsPage(providers, models, nil))
 	}
 }
 
@@ -656,15 +647,21 @@ func (a api) adminCreateModel() http.HandlerFunc {
 
 		if err := a.controller.CreateModel(r.Context(), r.Form.Get("provider"), r.Form.Get("model")); err != nil {
 			if errors.Is(err, ErrInvalidArgument) {
-				a.page(w, r, a.components.AdminNewModelPage([]string{"Provider and model are required"}))
+				w.Header().Set("X-Error", "Provider and model are required")
+			} else {
+				WriteError(w, "failed to create model", http.StatusInternalServerError, err)
 				return
 			}
-			WriteError(w, "failed to create model", http.StatusInternalServerError, err)
-			return
+		} else {
+			withSuccessToast(w)
 		}
 
-		withSuccessToast(w)
-		http.Redirect(w, r, a.components.endpoints.adminModels.Path(), http.StatusSeeOther)
+		providers, models, err := a.controller.ListAdminModels(r.Context())
+		if err != nil {
+			WriteError(w, "failed to load models", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.AdminModelsList(providers, models).Render(w)
 	}
 }
 
@@ -1208,7 +1205,6 @@ func (c components) Sidebar(isAdmin bool) g.Node {
 		groups = append(groups, []navLink{
 			{label: "New organization", href: c.endpoints.adminNewOrganization.Path(), icon: solid.BuildingOffice2(h.Class("h-5 w-5 shrink-0"))},
 			{label: "Organizations", href: c.endpoints.adminOrganizations.Path(), icon: solid.CircleStack(h.Class("h-5 w-5 shrink-0"))},
-			{label: "New model", href: c.endpoints.adminNewModel.Path(), icon: solid.PlusCircle(h.Class("h-5 w-5 shrink-0"))},
 			{label: "Models", href: c.endpoints.adminModels.Path(), icon: solid.Cube(h.Class("h-5 w-5 shrink-0"))},
 		})
 	}
@@ -1687,26 +1683,70 @@ func (c components) AdminOrgUsersList(users []ProjektoveOrganizationUser, orgID 
 	)
 }
 
-func (c components) AdminModelsPage(providers []Provider, models []Model) g.Node {
+func (c components) AdminModelsPage(providers []Provider, models []Model, validationErrors []string) g.Node {
 	nodes := []g.Node{
 		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("Models")),
-		h.A(
-			h.Href(c.endpoints.adminNewModel.Path()),
-			h.Class("inline-block mb-4 text-blue-700 hover:underline"),
-			g.Text("+ New model"),
-		),
 	}
+
+	if len(validationErrors) > 0 {
+		items := []g.Node{}
+		for _, m := range validationErrors {
+			items = append(items, h.Li(g.Text(m)))
+		}
+		nodes = append(nodes,
+			h.Div(
+				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3 max-w-2xl mb-6"),
+				h.H2(h.Class("font-semibold mb-1"), g.Text("Model could not be created")),
+				h.Ul(g.Group(items)),
+			),
+		)
+	}
+
+	nodes = append(nodes,
+		c.AdminModelsForm(),
+		c.AdminModelsList(providers, models),
+	)
+
+	return h.Div(g.Group(nodes))
+}
+
+func (c components) AdminModelsForm() g.Node {
+	return h.Form(
+		h.Method("post"),
+		htmx.Post(c.endpoints.adminCreateModel.Path()),
+		htmx.Target("#admin-models-list"),
+		htmx.Swap("outerHTML"),
+		htmx.On("htmx:after:request", "this.reset()"),
+		h.Class("space-y-6 max-w-2xl mb-8"),
+		h.Div(
+			h.Class("space-y-2"),
+			h.Label(h.Class("block text-sm font-medium"), g.Text("Provider")),
+			h.Input(h.Name("provider"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			h.P(h.Class("text-sm text-gray-500"), g.Text("e.g. openai. If the provider does not exist yet it will be created.")),
+		),
+		h.Div(
+			h.Class("space-y-2"),
+			h.Label(h.Class("block text-sm font-medium"), g.Text("Model")),
+			h.Input(h.Name("model"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			h.P(h.Class("text-sm text-gray-500"), g.Text("e.g. gpt-4o")),
+		),
+		c.SaveButton(h.Type("submit")),
+	)
+}
+
+func (c components) AdminModelsList(providers []Provider, models []Model) g.Node {
+	nodes := []g.Node{}
 
 	if len(providers) == 0 {
 		nodes = append(nodes, h.P(h.Class("text-gray-500"), g.Text("No providers yet.")))
 	} else {
 		providerItems := []g.Node{}
 		for _, p := range providers {
-			providerItems = append(providerItems, h.P(h.Class("text-sm"), g.Text(p.Provider)))
+			providerItems = append(providerItems, h.Span(h.Class("border rounded px-3 py-1 text-sm"), g.Text(p.Provider)))
 		}
 		nodes = append(nodes,
 			h.H2(h.Class("text-lg font-semibold mb-2"), g.Text("Providers")),
-			h.Div(h.Class("flex flex-wrap gap-2 mb-8"), g.Group(providerItems)),
+			h.Div(h.Class("flex flex-wrap gap-2 mb-6"), g.Group(providerItems)),
 		)
 	}
 
@@ -1740,49 +1780,7 @@ func (c components) AdminModelsPage(providers []Provider, models []Model) g.Node
 		)
 	}
 
-	return h.Div(g.Group(nodes))
-}
-
-func (c components) AdminNewModelPage(validationErrors []string) g.Node {
-	nodes := []g.Node{}
-
-	if len(validationErrors) > 0 {
-		items := []g.Node{}
-		for _, m := range validationErrors {
-			items = append(items, h.Li(g.Text(m)))
-		}
-		nodes = append(nodes,
-			h.Div(
-				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3 max-w-2xl"),
-				h.H2(h.Class("font-semibold mb-1"), g.Text("Model could not be created")),
-				h.Ul(g.Group(items)),
-			),
-		)
-	}
-
-	nodes = append(nodes,
-		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("New model")),
-		h.Form(
-			h.Method("post"),
-			h.Action(c.endpoints.adminCreateModel.Path()),
-			h.Class("space-y-6 max-w-2xl"),
-			h.Div(
-				h.Class("space-y-2"),
-				h.Label(h.Class("block text-sm font-medium"), g.Text("Provider")),
-				h.Input(h.Name("provider"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
-				h.P(h.Class("text-sm text-gray-500"), g.Text("e.g. openai. If the provider does not exist yet it will be created.")),
-			),
-			h.Div(
-				h.Class("space-y-2"),
-				h.Label(h.Class("block text-sm font-medium"), g.Text("Model")),
-				h.Input(h.Name("model"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
-				h.P(h.Class("text-sm text-gray-500"), g.Text("e.g. gpt-4o")),
-			),
-			c.CreateButton(h.Type("submit")),
-		),
-	)
-
-	return h.Div(g.Group(nodes))
+	return h.Div(h.ID("admin-models-list"), h.Class("space-y-4"), g.Group(nodes))
 }
 
 func (c components) UserPage(profile UserProfileView) g.Node {
