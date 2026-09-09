@@ -53,17 +53,20 @@ func run() error {
 	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, NewLLMProvider: projektovemeeting.NewLLM, TxProvider: txp}
 
 	if config.Auth.DefaultUser != "" {
-		hash, err := projektovemeeting.HashPassword(config.Auth.DefaultPassword)
+		_, err := repo.GetUser(context.Background(), config.Auth.DefaultUser)
 		if err != nil {
-			return fmt.Errorf("when hashing default user password: %w", err)
-		}
-		obj := projektovemeeting.UserCreate{
-			Email:        config.Auth.DefaultUser,
-			PasswordHash: new(hash),
-			IsAdmin:      true,
-		}
-		if _, err := repo.StoreUser(context.Background(), obj); err != nil {
-			return fmt.Errorf("when bootstrapping default user: %w", err)
+			hash, err := projektovemeeting.HashPassword(config.Auth.DefaultPassword)
+			if err != nil {
+				return fmt.Errorf("when hashing default user password: %w", err)
+			}
+			obj := projektovemeeting.UserCreate{
+				Email:        config.Auth.DefaultUser,
+				PasswordHash: new(hash),
+				IsAdmin:      true,
+			}
+			if _, err := repo.StoreUser(context.Background(), obj); err != nil {
+				return fmt.Errorf("when bootstrapping default user: %w", err)
+			}
 		}
 	}
 

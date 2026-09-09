@@ -191,3 +191,11 @@ type BatchView struct {
 	OrgID       string
 	Issues      []IssueView
 }
+
+type AdminOrganizationView struct {
+	ID       int
+	Name     string
+	APIURL   string
+	BrowserURL string
+	Users    []ProjektoveOrganizationUser
+}

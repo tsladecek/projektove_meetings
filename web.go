@@ -44,6 +44,13 @@ type endpoints struct {
 	newBatch  Endpoint
 	batch     Endpoint
 
+	// admin pages
+	adminOrganizations   Endpoint
+	adminNewOrganization Endpoint
+	adminOrganization    Endpoint
+	adminModels          Endpoint
+	adminNewModel        Endpoint
+
 	// api - should have /api prefix
 	updateUser    Endpoint
 	addContext    Endpoint
@@ -57,6 +64,13 @@ type endpoints struct {
 	updateIssue Endpoint
 	submitIssue Endpoint
 	ignoreIssue Endpoint
+
+	// admin api - /api/admin prefix
+	adminCreateOrganization Endpoint
+	adminUpdateOrganization Endpoint
+	adminAddOrgUser         Endpoint
+	adminRemoveOrgUser      Endpoint
+	adminCreateModel        Endpoint
 }
 
 type components struct {
@@ -94,6 +108,13 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 		newBatch:  end(http.MethodGet, "/batches/new"),
 		batch:     end(http.MethodGet, "/batches/{id}"),
 
+		// admin pages
+		adminOrganizations:   end(http.MethodGet, "/admin/organizations"),
+		adminNewOrganization: end(http.MethodGet, "/admin/organizations/new"),
+		adminOrganization:    end(http.MethodGet, "/admin/organizations/{id}"),
+		adminModels:          end(http.MethodGet, "/admin/models"),
+		adminNewModel:        end(http.MethodGet, "/admin/models/new"),
+
 		// api
 
 		updateUser:    endAPI(http.MethodPut, "/user"),
@@ -108,6 +129,13 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 		updateIssue: endAPI(http.MethodPut, "/issues/{id}"),
 		submitIssue: endAPI(http.MethodPost, "/issues/{id}/submit"),
 		ignoreIssue: endAPI(http.MethodPut, "/issues/{id}/ignore"),
+
+		// admin api
+		adminCreateOrganization: endAPI(http.MethodPost, "/admin/organizations"),
+		adminUpdateOrganization: endAPI(http.MethodPost, "/admin/organizations/{id}"),
+		adminAddOrgUser:         endAPI(http.MethodPost, "/admin/organizations/{id}/users"),
+		adminRemoveOrgUser:      endAPI(http.MethodDelete, "/admin/organizations/{id}/users/{uid}"),
+		adminCreateModel:        endAPI(http.MethodPost, "/admin/models"),
 	}
 
 	c := components{endpoints: e, endpointLogout: logoutEndpoint}
@@ -147,15 +175,45 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 		m.Handle(eh.endpoint.Pattern(), auth.Middleware(eh.handler))
 	}
 
+	// admin routes require an admin user
+	for _, eh := range []endpointHandler{
+		// admin pages
+		{endpoint: e.adminOrganizations, handler: a.adminOrganizations()},
+		{endpoint: e.adminNewOrganization, handler: a.adminNewOrganization()},
+		{endpoint: e.adminOrganization, handler: a.adminOrganization()},
+		{endpoint: e.adminModels, handler: a.adminModels()},
+		{endpoint: e.adminNewModel, handler: a.adminNewModel()},
+
+		// admin api
+		{endpoint: e.adminCreateOrganization, handler: a.adminCreateOrganization()},
+		{endpoint: e.adminUpdateOrganization, handler: a.adminUpdateOrganization()},
+		{endpoint: e.adminAddOrgUser, handler: a.adminAddOrgUser()},
+		{endpoint: e.adminRemoveOrgUser, handler: a.adminRemoveOrgUser()},
+		{endpoint: e.adminCreateModel, handler: a.adminCreateModel()},
+	} {
+		m.Handle(eh.endpoint.Pattern(), auth.Middleware(requireAdmin(eh.handler)))
+	}
+
 	auth.RegisterRoutes(m)
 
 	handler := MiddlewareLogging(m)
 	return handler
 }
 
+func requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok || !user.IsAdmin {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (a api) root() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.components.Page(a.components.RootPage()).Render(w)
+		a.page(w, r, a.components.RootPage())
 	}
 }
 
@@ -189,7 +247,7 @@ func (a api) user() http.HandlerFunc {
 			return
 		}
 
-		a.components.Page(a.components.UserPage(profile)).Render(w)
+		a.page(w, r, a.components.UserPage(profile))
 	}
 }
 
@@ -223,7 +281,7 @@ func (a api) prompts() http.HandlerFunc {
 			a.components.PromptsBatch(view).Render(w)
 			return
 		}
-		a.components.Page(a.components.PromptsPage(view)).Render(w)
+		a.page(w, r, a.components.PromptsPage(view))
 	}
 }
 
@@ -253,7 +311,7 @@ func (a api) newPrompt() http.HandlerFunc {
 			return
 		}
 
-		a.components.Page(a.components.NewPromptPage(contexts, models, orgs, nil)).Render(w)
+		a.page(w, r, a.components.NewPromptPage(contexts, models, orgs, nil))
 	}
 }
 
@@ -298,7 +356,7 @@ func (a api) prompt() http.HandlerFunc {
 			fragment.Render(w)
 			return
 		}
-		a.components.Page(fragment).Render(w)
+		a.page(w, r, fragment)
 	}
 }
 
@@ -330,7 +388,7 @@ func (a api) batches() http.HandlerFunc {
 			a.components.BatchesList(view).Render(w)
 			return
 		}
-		a.components.Page(a.components.BatchesPage(view)).Render(w)
+		a.page(w, r, a.components.BatchesPage(view))
 	}
 }
 
@@ -348,7 +406,7 @@ func (a api) newBatch() http.HandlerFunc {
 			return
 		}
 
-		a.components.Page(a.components.NewBatchPage(orgs, nil)).Render(w)
+		a.page(w, r, a.components.NewBatchPage(orgs, nil))
 	}
 }
 
@@ -393,7 +451,220 @@ func (a api) batch() http.HandlerFunc {
 			fragment.Render(w)
 			return
 		}
-		a.components.Page(fragment).Render(w)
+		a.page(w, r, fragment)
+	}
+}
+
+// admin pages
+
+func (a api) adminOrganizations() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgs, err := a.controller.ListAdminOrganizations(r.Context())
+		if err != nil {
+			WriteError(w, "failed to load organizations", http.StatusInternalServerError, err)
+			return
+		}
+		a.page(w, r, a.components.AdminOrganizationsPage(orgs))
+	}
+}
+
+func (a api) adminNewOrganization() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		a.page(w, r, a.components.AdminNewOrganizationPage(nil))
+	}
+}
+
+func (a api) adminOrganization() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil {
+			WriteError(w, "invalid organization", http.StatusBadRequest, nil)
+			return
+		}
+
+		view, err := a.controller.GetAdminOrganization(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "organization not found", http.StatusNotFound, nil)
+				return
+			}
+			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		a.page(w, r, a.components.AdminOrganizationPage(view))
+	}
+}
+
+func (a api) adminModels() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		providers, models, err := a.controller.ListAdminModels(r.Context())
+		if err != nil {
+			WriteError(w, "failed to load models", http.StatusInternalServerError, err)
+			return
+		}
+		a.page(w, r, a.components.AdminModelsPage(providers, models))
+	}
+}
+
+func (a api) adminNewModel() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		a.page(w, r, a.components.AdminNewModelPage(nil))
+	}
+}
+
+// admin api
+
+func (a api) adminCreateOrganization() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		id, err := a.controller.CreateOrganization(r.Context(), r.Form.Get("name"), r.Form.Get("api_url"), r.Form.Get("browser_url"))
+		if err != nil {
+			if errors.Is(err, ErrInvalidArgument) {
+				a.page(w, r, a.components.AdminNewOrganizationPage([]string{"All fields are required"}))
+				return
+			}
+			WriteError(w, "failed to create organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		redirectPath := strings.Replace(a.components.endpoints.adminOrganization.Path(), "{id}", strconv.Itoa(id), 1)
+		http.Redirect(w, r, redirectPath, http.StatusSeeOther)
+	}
+}
+
+func (a api) adminUpdateOrganization() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil {
+			WriteError(w, "invalid organization", http.StatusBadRequest, nil)
+			return
+		}
+
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		err = a.controller.UpdateOrganization(r.Context(), id, r.Form.Get("name"), r.Form.Get("api_url"), r.Form.Get("browser_url"))
+		if err != nil {
+			if errors.Is(err, ErrInvalidArgument) {
+				w.Header().Set("X-Error", "All fields are required")
+				view, _ := a.controller.GetAdminOrganization(r.Context(), id)
+				a.components.AdminOrgDetailsForm(view, nil).Render(w)
+				return
+			}
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "organization not found", http.StatusNotFound, nil)
+				return
+			}
+			WriteError(w, "failed to update organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		withSuccessToast(w)
+		view, err := a.controller.GetAdminOrganization(r.Context(), id)
+		if err != nil {
+			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.AdminOrgDetailsForm(view, nil).Render(w)
+	}
+}
+
+func (a api) adminAddOrgUser() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil {
+			WriteError(w, "invalid organization", http.StatusBadRequest, nil)
+			return
+		}
+
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		projektoveID, _ := strconv.Atoi(r.Form.Get("projektove_id"))
+		if err := a.controller.AddOrganizationUser(r.Context(), id, r.Form.Get("name"), projektoveID); err != nil {
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "organization not found", http.StatusNotFound, nil)
+				return
+			}
+			if errors.Is(err, ErrInvalidArgument) {
+				w.Header().Set("X-Error", "Name and Projektove ID are required")
+				view, _ := a.controller.GetAdminOrganization(r.Context(), id)
+				a.components.AdminOrgUsersList(view.Users, id).Render(w)
+				return
+			}
+			WriteError(w, "failed to add organization user", http.StatusInternalServerError, err)
+			return
+		}
+
+		withSuccessToast(w)
+		view, err := a.controller.GetAdminOrganization(r.Context(), id)
+		if err != nil {
+			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.AdminOrgUsersList(view.Users, id).Render(w)
+	}
+}
+
+func (a api) adminRemoveOrgUser() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil {
+			WriteError(w, "invalid organization", http.StatusBadRequest, nil)
+			return
+		}
+		uid, err := strconv.Atoi(r.PathValue("uid"))
+		if err != nil {
+			WriteError(w, "invalid organization user", http.StatusBadRequest, nil)
+			return
+		}
+
+		if err := a.controller.RemoveOrganizationUser(r.Context(), id, uid); err != nil {
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "organization user not found", http.StatusNotFound, nil)
+				return
+			}
+			WriteError(w, "failed to remove organization user", http.StatusInternalServerError, err)
+			return
+		}
+
+		withSuccessToast(w)
+		view, err := a.controller.GetAdminOrganization(r.Context(), id)
+		if err != nil {
+			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.AdminOrgUsersList(view.Users, id).Render(w)
+	}
+}
+
+func (a api) adminCreateModel() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		if err := a.controller.CreateModel(r.Context(), r.Form.Get("provider"), r.Form.Get("model")); err != nil {
+			if errors.Is(err, ErrInvalidArgument) {
+				a.page(w, r, a.components.AdminNewModelPage([]string{"Provider and model are required"}))
+				return
+			}
+			WriteError(w, "failed to create model", http.StatusInternalServerError, err)
+			return
+		}
+
+		withSuccessToast(w)
+		http.Redirect(w, r, a.components.endpoints.adminModels.Path(), http.StatusSeeOther)
 	}
 }
 
@@ -592,9 +863,9 @@ func (a api) createPrompt() http.HandlerFunc {
 					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
 					return
 				}
-				a.components.Page(a.components.NewPromptPage(contexts, models, orgs, []string{
+				a.page(w, r, a.components.NewPromptPage(contexts, models, orgs, []string{
 					"The Projektove organization token is not configured. Set it on the User page before creating a prompt.",
-				})).Render(w)
+				}))
 				return
 			}
 			if errors.Is(err, ErrUserModelNotFound) {
@@ -650,9 +921,9 @@ func (a api) createBatch() http.HandlerFunc {
 					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
 					return
 				}
-				a.components.Page(a.components.NewBatchPage(orgs, []string{
+				a.page(w, r, a.components.NewBatchPage(orgs, []string{
 					"The Projektove organization token is not configured. Set it on the User page before uploading a batch.",
-				})).Render(w)
+				}))
 				return
 			}
 
@@ -663,7 +934,7 @@ func (a api) createBatch() http.HandlerFunc {
 					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
 					return
 				}
-				a.components.Page(a.components.NewBatchPage(orgs, csvErr.Messages)).Render(w)
+				a.page(w, r, a.components.NewBatchPage(orgs, csvErr.Messages))
 				return
 			}
 			WriteError(w, "failed to create batch", http.StatusInternalServerError, err)
@@ -875,7 +1146,7 @@ func (a api) ignoreIssue() http.HandlerFunc {
 	}
 }
 
-func (c components) Page(body g.Node) g.Node {
+func (c components) Page(isAdmin bool, body g.Node) g.Node {
 	return co.HTML5(
 		co.HTML5Props{
 			Title:       "Meetings",
@@ -890,7 +1161,7 @@ func (c components) Page(body g.Node) g.Node {
 			Body: []g.Node{
 				h.Div(
 					h.Class("w-screen h-screen flex"),
-					c.Sidebar(),
+					c.Sidebar(isAdmin),
 					h.Main(
 						h.Class("flex-1 overflow-auto p-6"),
 						body,
@@ -905,13 +1176,19 @@ func (c components) Page(body g.Node) g.Node {
 	)
 }
 
+func (a api) page(w http.ResponseWriter, r *http.Request, body g.Node) {
+	user, ok := UserFromContext(r.Context())
+	isAdmin := ok && user.IsAdmin
+	a.components.Page(isAdmin, body).Render(w)
+}
+
 type navLink struct {
 	label string
 	href  string
 	icon  g.Node
 }
 
-func (c components) Sidebar() g.Node {
+func (c components) Sidebar(isAdmin bool) g.Node {
 	groups := [][]navLink{
 		{
 			{label: "Home", href: c.endpoints.root.Path(), icon: solid.Home(h.Class("h-5 w-5 shrink-0"))},
@@ -925,6 +1202,15 @@ func (c components) Sidebar() g.Node {
 			{label: "New batch", href: c.endpoints.newBatch.Path(), icon: solid.ArrowUpTray(h.Class("h-5 w-5 shrink-0"))},
 			{label: "Batches", href: c.endpoints.batches.Path(), icon: solid.CircleStack(h.Class("h-5 w-5 shrink-0"))},
 		},
+	}
+
+	if isAdmin {
+		groups = append(groups, []navLink{
+			{label: "New organization", href: c.endpoints.adminNewOrganization.Path(), icon: solid.BuildingOffice2(h.Class("h-5 w-5 shrink-0"))},
+			{label: "Organizations", href: c.endpoints.adminOrganizations.Path(), icon: solid.CircleStack(h.Class("h-5 w-5 shrink-0"))},
+			{label: "New model", href: c.endpoints.adminNewModel.Path(), icon: solid.PlusCircle(h.Class("h-5 w-5 shrink-0"))},
+			{label: "Models", href: c.endpoints.adminModels.Path(), icon: solid.Cube(h.Class("h-5 w-5 shrink-0"))},
+		})
 	}
 
 	navBlocks := []g.Node{}
@@ -1191,6 +1477,312 @@ func promptStatusDisplay(status PromptStatus) (string, string) {
 	default:
 		return string(status), "text-gray-500"
 	}
+}
+
+// admin components
+
+func (c components) AdminOrganizationsPage(orgs []AdminOrganizationView) g.Node {
+	rows := []g.Node{}
+	for _, o := range orgs {
+		path := strings.Replace(c.endpoints.adminOrganization.Path(), "{id}", strconv.Itoa(o.ID), 1)
+		rows = append(rows,
+			h.A(
+				h.Href(path),
+				h.Class("flex justify-between items-center border rounded px-4 py-3 hover:bg-gray-50"),
+				h.Div(
+					h.Div(h.Class("font-medium"), g.Text(o.Name)),
+					h.Div(h.Class("text-sm text-gray-500"), g.Text(o.APIURL)),
+				),
+				h.Span(h.Class("text-sm text-gray-500"), g.Text(strconv.Itoa(len(o.Users))+" users")),
+			),
+		)
+	}
+
+	nodes := []g.Node{
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("Organizations")),
+		h.A(
+			h.Href(c.endpoints.adminNewOrganization.Path()),
+			h.Class("inline-block mb-4 text-blue-700 hover:underline"),
+			g.Text("+ New organization"),
+		),
+	}
+	if len(rows) == 0 {
+		nodes = append(nodes, h.P(h.Class("text-gray-500"), g.Text("No organizations yet.")))
+	} else {
+		nodes = append(nodes, h.Div(h.Class("flex flex-col gap-2"), g.Group(rows)))
+	}
+
+	return h.Div(g.Group(nodes))
+}
+
+func (c components) AdminNewOrganizationPage(validationErrors []string) g.Node {
+	nodes := []g.Node{}
+
+	if len(validationErrors) > 0 {
+		items := []g.Node{}
+		for _, m := range validationErrors {
+			items = append(items, h.Li(g.Text(m)))
+		}
+		nodes = append(nodes,
+			h.Div(
+				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3 max-w-2xl"),
+				h.H2(h.Class("font-semibold mb-1"), g.Text("Organization could not be created")),
+				h.Ul(g.Group(items)),
+			),
+		)
+	}
+
+	nodes = append(nodes,
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("New organization")),
+		h.Form(
+			h.Method("post"),
+			h.Action(c.endpoints.adminCreateOrganization.Path()),
+			h.Class("space-y-6 max-w-2xl"),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Name")),
+				h.Input(h.Name("name"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove API URL")),
+				h.Input(h.Name("api_url"), h.Type("url"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+				h.P(h.Class("text-sm text-gray-500"), g.Text("Base URL of the Projektove API, e.g. https://api.projektove.com/api")),
+			),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove Browser URL")),
+				h.Input(h.Name("browser_url"), h.Type("url"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+				h.P(h.Class("text-sm text-gray-500"), g.Text("Base URL of the Projektove web UI, e.g. https://projektove.com")),
+			),
+			c.CreateButton(h.Type("submit")),
+		),
+	)
+
+	return h.Div(g.Group(nodes))
+}
+
+func (c components) AdminOrganizationPage(view AdminOrganizationView) g.Node {
+	return h.Div(
+		h.A(
+			h.Href(c.endpoints.adminOrganizations.Path()),
+			h.Class("inline-block mb-2 text-gray-500 hover:underline text-sm"),
+			g.Text("<- Organizations"),
+		),
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("Organization: "+view.Name)),
+		c.AdminOrgDetailsForm(view, nil),
+		c.AdminOrgUsersList(view.Users, view.ID),
+	)
+}
+
+func (c components) AdminOrgDetailsForm(view AdminOrganizationView, validationErrors []string) g.Node {
+	nodes := []g.Node{}
+
+	if len(validationErrors) > 0 {
+		items := []g.Node{}
+		for _, m := range validationErrors {
+			items = append(items, h.Li(g.Text(m)))
+		}
+		nodes = append(nodes,
+			h.Div(
+				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3"),
+				h.H2(h.Class("font-semibold mb-1"), g.Text("Organization could not be updated")),
+				h.Ul(g.Group(items)),
+			),
+		)
+	}
+
+	path := strings.Replace(c.endpoints.adminUpdateOrganization.Path(), "{id}", strconv.Itoa(view.ID), 1)
+
+	nodes = append(nodes,
+		h.Form(
+			h.Method("post"),
+			htmx.Post(path),
+			htmx.Target("this"),
+			htmx.Swap("outerHTML"),
+			h.Class("space-y-6 max-w-2xl mb-8"),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Name")),
+				h.Input(h.Name("name"), h.Value(view.Name), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove API URL")),
+				h.Input(h.Name("api_url"), h.Type("url"), h.Value(view.APIURL), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove Browser URL")),
+				h.Input(h.Name("browser_url"), h.Type("url"), h.Value(view.BrowserURL), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			c.SaveButton(h.Type("submit")),
+		),
+	)
+
+	return h.Div(h.ID("admin-org-form"), g.Group(nodes))
+}
+
+func (c components) AdminOrgUsersList(users []ProjektoveOrganizationUser, orgID int) g.Node {
+	rows := []g.Node{}
+	for _, u := range users {
+		removePath := strings.Replace(strings.Replace(c.endpoints.adminRemoveOrgUser.Path(), "{id}", strconv.Itoa(orgID), 1), "{uid}", strconv.Itoa(u.ID), 1)
+		rows = append(rows,
+			h.Tr(
+				h.Td(h.Class("py-2 px-3"), g.Text(u.Name)),
+				h.Td(h.Class("py-2 px-3"), g.Text(strconv.Itoa(u.ProjektoveID))),
+				h.Td(h.Class("py-2 px-3 text-right"),
+					c.DeleteButton(
+						h.Type("button"),
+						htmx.Delete(removePath),
+						htmx.Target("#org-users-list"),
+						htmx.Swap("outerHTML"),
+						htmx.Confirm("Remove "+u.Name+" from this organization?"),
+					),
+				),
+			),
+		)
+	}
+
+	addPath := strings.Replace(c.endpoints.adminAddOrgUser.Path(), "{id}", strconv.Itoa(orgID), 1)
+
+	return h.Div(
+		h.ID("org-users-list"),
+		h.Class("space-y-4 max-w-2xl"),
+		h.H2(h.Class("text-lg font-semibold"), g.Text("Organization users")),
+		h.Form(
+			h.ID("add-org-user-form"),
+			h.Method("post"),
+			htmx.Post(addPath),
+			htmx.Target("#org-users-list"),
+			htmx.Swap("outerHTML"),
+			htmx.On("htmx:after:request", "this.reset()"),
+			h.Class("flex gap-2 items-end"),
+			h.Div(
+				h.Class("space-y-1 flex-1"),
+				h.Label(h.Class("block text-xs font-medium"), g.Text("Name")),
+				h.Input(h.Name("name"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			h.Div(
+				h.Class("space-y-1"),
+				h.Label(h.Class("block text-xs font-medium"), g.Text("Projektove ID")),
+				h.Input(h.Name("projektove_id"), h.Type("number"), h.Min("1"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			c.AddButton("Add user", h.Type("submit")),
+		),
+		h.Div(
+			h.Class("border rounded overflow-hidden"),
+			h.Table(
+				h.Class("w-full text-sm"),
+				h.THead(
+					h.Tr(
+						h.Th(h.Class("text-left py-2 px-3 bg-gray-50"), g.Text("Name")),
+						h.Th(h.Class("text-left py-2 px-3 bg-gray-50"), g.Text("Projektove ID")),
+						h.Th(h.Class("py-2 px-3 bg-gray-50")),
+					),
+				),
+				h.TBody(g.Group(rows)),
+			),
+		),
+	)
+}
+
+func (c components) AdminModelsPage(providers []Provider, models []Model) g.Node {
+	nodes := []g.Node{
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("Models")),
+		h.A(
+			h.Href(c.endpoints.adminNewModel.Path()),
+			h.Class("inline-block mb-4 text-blue-700 hover:underline"),
+			g.Text("+ New model"),
+		),
+	}
+
+	if len(providers) == 0 {
+		nodes = append(nodes, h.P(h.Class("text-gray-500"), g.Text("No providers yet.")))
+	} else {
+		providerItems := []g.Node{}
+		for _, p := range providers {
+			providerItems = append(providerItems, h.P(h.Class("text-sm"), g.Text(p.Provider)))
+		}
+		nodes = append(nodes,
+			h.H2(h.Class("text-lg font-semibold mb-2"), g.Text("Providers")),
+			h.Div(h.Class("flex flex-wrap gap-2 mb-8"), g.Group(providerItems)),
+		)
+	}
+
+	if len(models) == 0 {
+		nodes = append(nodes, h.P(h.Class("text-gray-500"), g.Text("No models yet.")))
+	} else {
+		rows := []g.Node{}
+		for _, m := range models {
+			rows = append(rows,
+				h.Tr(
+					h.Td(h.Class("py-2 px-3"), g.Text(m.Provider)),
+					h.Td(h.Class("py-2 px-3"), g.Text(m.Model)),
+				),
+			)
+		}
+		nodes = append(nodes,
+			h.H2(h.Class("text-lg font-semibold mb-2"), g.Text("Models")),
+			h.Div(
+				h.Class("border rounded overflow-hidden max-w-2xl"),
+				h.Table(
+					h.Class("w-full text-sm"),
+					h.THead(
+						h.Tr(
+							h.Th(h.Class("text-left py-2 px-3 bg-gray-50"), g.Text("Provider")),
+							h.Th(h.Class("text-left py-2 px-3 bg-gray-50"), g.Text("Model")),
+						),
+					),
+					h.TBody(g.Group(rows)),
+				),
+			),
+		)
+	}
+
+	return h.Div(g.Group(nodes))
+}
+
+func (c components) AdminNewModelPage(validationErrors []string) g.Node {
+	nodes := []g.Node{}
+
+	if len(validationErrors) > 0 {
+		items := []g.Node{}
+		for _, m := range validationErrors {
+			items = append(items, h.Li(g.Text(m)))
+		}
+		nodes = append(nodes,
+			h.Div(
+				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3 max-w-2xl"),
+				h.H2(h.Class("font-semibold mb-1"), g.Text("Model could not be created")),
+				h.Ul(g.Group(items)),
+			),
+		)
+	}
+
+	nodes = append(nodes,
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("New model")),
+		h.Form(
+			h.Method("post"),
+			h.Action(c.endpoints.adminCreateModel.Path()),
+			h.Class("space-y-6 max-w-2xl"),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Provider")),
+				h.Input(h.Name("provider"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+				h.P(h.Class("text-sm text-gray-500"), g.Text("e.g. openai. If the provider does not exist yet it will be created.")),
+			),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Model")),
+				h.Input(h.Name("model"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+				h.P(h.Class("text-sm text-gray-500"), g.Text("e.g. gpt-4o")),
+			),
+			c.CreateButton(h.Type("submit")),
+		),
+	)
+
+	return h.Div(g.Group(nodes))
 }
 
 func (c components) UserPage(profile UserProfileView) g.Node {
@@ -1813,7 +2405,7 @@ func (c components) IgnoreButton(opts ...g.Node) g.Node {
 func (c components) CreateButton(opts ...g.Node) g.Node {
 	return c.button(
 		baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 disabled:bg-gray-400 disabled:hover:bg-gray-400",
-		append(opts, solid.Sparkles(h.Class("h-4 w-4")), g.Text("Create issues"))...,
+		append(opts, solid.Sparkles(h.Class("h-4 w-4")), g.Text("Create"))...,
 	)
 }
 

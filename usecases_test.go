@@ -858,3 +858,135 @@ func TestControllerGetIssueViewByUUID(t *testing.T) {
 	assert.Equal(t, "subject", view.Subject)
 	assert.Equal(t, IssueStatusCreated, view.Status)
 }
+
+func TestControllerListAdminOrganizations(t *testing.T) {
+	repo := newRepository(t)
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+	require.NoError(t, repo.StoreOrganizationUser(t.Context(), id, "jane", 42))
+
+	c := Controller{Repository: repo}
+	views, err := c.ListAdminOrganizations(t.Context())
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	assert.Equal(t, id, views[0].ID)
+	assert.Equal(t, "acme", views[0].Name)
+	require.Len(t, views[0].Users, 1)
+	assert.Equal(t, "jane", views[0].Users[0].Name)
+}
+
+func TestControllerGetAdminOrganization(t *testing.T) {
+	repo := newRepository(t)
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+	view, err := c.GetAdminOrganization(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, id, view.ID)
+
+	_, err = c.GetAdminOrganization(t.Context(), 999)
+	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
+}
+
+func TestControllerCreateOrganization(t *testing.T) {
+	repo := newRepository(t)
+	c := Controller{Repository: repo}
+
+	id, err := c.CreateOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+	require.NotZero(t, id)
+
+	_, err = c.CreateOrganization(t.Context(), "", "https://api.example.com", "https://app.example.com")
+	assert.True(t, errors.Is(err, ErrInvalidArgument))
+}
+
+func TestControllerUpdateOrganization(t *testing.T) {
+	repo := newRepository(t)
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+	require.NoError(t, c.UpdateOrganization(t.Context(), id, "acme2", "https://api2.example.com", "https://app2.example.com"))
+
+	view, err := c.GetAdminOrganization(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, "acme2", view.Name)
+
+	err = c.UpdateOrganization(t.Context(), id, "", "x", "y")
+	assert.True(t, errors.Is(err, ErrInvalidArgument))
+
+	err = c.UpdateOrganization(t.Context(), 999, "x", "y", "z")
+	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
+}
+
+func TestControllerAddOrganizationUser(t *testing.T) {
+	repo := newRepository(t)
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+	require.NoError(t, c.AddOrganizationUser(t.Context(), id, "jane", 42))
+
+	view, err := c.GetAdminOrganization(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, view.Users, 1)
+	assert.Equal(t, "jane", view.Users[0].Name)
+	assert.Equal(t, 42, view.Users[0].ProjektoveID)
+
+	err = c.AddOrganizationUser(t.Context(), id, "", 42)
+	assert.True(t, errors.Is(err, ErrInvalidArgument))
+
+	err = c.AddOrganizationUser(t.Context(), id, "jane", 0)
+	assert.True(t, errors.Is(err, ErrInvalidArgument))
+}
+
+func TestControllerRemoveOrganizationUser(t *testing.T) {
+	repo := newRepository(t)
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+	require.NoError(t, repo.StoreOrganizationUser(t.Context(), id, "jane", 42))
+
+	c := Controller{Repository: repo}
+	view, err := c.GetAdminOrganization(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, view.Users, 1)
+
+	require.NoError(t, c.RemoveOrganizationUser(t.Context(), id, view.Users[0].ID))
+
+	view, err = c.GetAdminOrganization(t.Context(), id)
+	require.NoError(t, err)
+	assert.Empty(t, view.Users)
+}
+
+func TestControllerListAdminModels(t *testing.T) {
+	repo := newRepository(t)
+	providerID, err := repo.GetOrCreateProvider(t.Context(), "openai")
+	require.NoError(t, err)
+	_, _, err = repo.GetOrCreateModel(t.Context(), providerID, "gpt-4o")
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+	providers, models, err := c.ListAdminModels(t.Context())
+	require.NoError(t, err)
+	require.Len(t, providers, 1)
+	require.Len(t, models, 1)
+	assert.Equal(t, "openai", providers[0].Provider)
+	assert.Equal(t, "openai", models[0].Provider)
+	assert.Equal(t, "gpt-4o", models[0].Model)
+}
+
+func TestControllerCreateModel(t *testing.T) {
+	repo := newRepository(t)
+	c := Controller{Repository: repo}
+
+	require.NoError(t, c.CreateModel(t.Context(), "openai", "gpt-4o"))
+
+	providers, models, err := c.ListAdminModels(t.Context())
+	require.NoError(t, err)
+	require.Len(t, providers, 1)
+	require.Len(t, models, 1)
+
+	err = c.CreateModel(t.Context(), "", "gpt-4o")
+	assert.True(t, errors.Is(err, ErrInvalidArgument))
+}

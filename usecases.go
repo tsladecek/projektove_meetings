@@ -793,3 +793,111 @@ func (c Controller) IgnoreIssue(ctx context.Context, user User, issueUUID string
 
 	return nil
 }
+
+func (c Controller) ListAdminOrganizations(ctx context.Context) ([]AdminOrganizationView, error) {
+	orgs, err := c.Repository.ListProjektoveOrganizations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("when listing organizations: %w", err)
+	}
+
+	views := make([]AdminOrganizationView, 0, len(orgs))
+	for _, o := range orgs {
+		users, err := c.Repository.ListOrganizationUsers(ctx, o.ID)
+		if err != nil {
+			return nil, fmt.Errorf("when listing organization users: %w", err)
+		}
+		views = append(views, AdminOrganizationView{ID: o.ID, Name: o.Name, APIURL: o.APIURL, BrowserURL: o.BrowserURL, Users: users})
+	}
+
+	return views, nil
+}
+
+func (c Controller) GetAdminOrganization(ctx context.Context, id int) (AdminOrganizationView, error) {
+	o, err := c.Repository.GetProjektoveOrganization(ctx, id)
+	if err != nil {
+		return AdminOrganizationView{}, err
+	}
+
+	users, err := c.Repository.ListOrganizationUsers(ctx, o.ID)
+	if err != nil {
+		return AdminOrganizationView{}, fmt.Errorf("when listing organization users: %w", err)
+	}
+
+	return AdminOrganizationView{ID: o.ID, Name: o.Name, APIURL: o.APIURL, BrowserURL: o.BrowserURL, Users: users}, nil
+}
+
+func (c Controller) CreateOrganization(ctx context.Context, name, apiURL, browserURL string) (int, error) {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(apiURL) == "" || strings.TrimSpace(browserURL) == "" {
+		return 0, fmt.Errorf("name, api url and browser url are required: %w", ErrInvalidArgument)
+	}
+
+	id, err := c.Repository.StoreProjektoveOrganization(ctx, name, apiURL, browserURL)
+	if err != nil {
+		return 0, fmt.Errorf("when storing organization: %w", err)
+	}
+
+	return id, nil
+}
+
+func (c Controller) UpdateOrganization(ctx context.Context, id int, name, apiURL, browserURL string) error {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(apiURL) == "" || strings.TrimSpace(browserURL) == "" {
+		return fmt.Errorf("name, api url and browser url are required: %w", ErrInvalidArgument)
+	}
+
+	if err := c.Repository.UpdateProjektoveOrganization(ctx, id, name, apiURL, browserURL); err != nil {
+		return fmt.Errorf("when updating organization: %w", err)
+	}
+
+	return nil
+}
+
+func (c Controller) AddOrganizationUser(ctx context.Context, orgID int, name string, projektoveID int) error {
+	if strings.TrimSpace(name) == "" || projektoveID <= 0 {
+		return fmt.Errorf("name and valid projektove_id are required: %w", ErrInvalidArgument)
+	}
+
+	if err := c.Repository.StoreOrganizationUser(ctx, orgID, name, projektoveID); err != nil {
+		return fmt.Errorf("when storing organization user: %w", err)
+	}
+
+	return nil
+}
+
+func (c Controller) RemoveOrganizationUser(ctx context.Context, orgID int, id int) error {
+	if err := c.Repository.DeleteOrganizationUser(ctx, orgID, id); err != nil {
+		return fmt.Errorf("when deleting organization user: %w", err)
+	}
+
+	return nil
+}
+
+func (c Controller) ListAdminModels(ctx context.Context) ([]Provider, []Model, error) {
+	providers, err := c.Repository.ListProviders(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("when listing providers: %w", err)
+	}
+
+	models, err := c.Repository.ListModels(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("when listing models: %w", err)
+	}
+
+	return providers, models, nil
+}
+
+func (c Controller) CreateModel(ctx context.Context, provider, model string) error {
+	if strings.TrimSpace(provider) == "" || strings.TrimSpace(model) == "" {
+		return fmt.Errorf("provider and model are required: %w", ErrInvalidArgument)
+	}
+
+	providerID, err := c.Repository.GetOrCreateProvider(ctx, provider)
+	if err != nil {
+		return fmt.Errorf("when getting provider: %w", err)
+	}
+
+	if _, _, err := c.Repository.GetOrCreateModel(ctx, providerID, model); err != nil {
+		return fmt.Errorf("when creating model: %w", err)
+	}
+
+	return nil
+}

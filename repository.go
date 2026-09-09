@@ -644,6 +644,34 @@ func (r *RepositorySqlite) GetOrCreateModel(ctx context.Context, providerID int,
 	return id, existingUUID, nil
 }
 
+func (r *RepositorySqlite) ListModels(ctx context.Context) ([]Model, error) {
+	models := []Model{}
+
+	rows, err := r.DB.QueryContext(ctx, `
+	SELECT m.id, m.uuid, m.provider_id, pr.provider, m.model
+	FROM models m
+	JOIN providers pr ON m.provider_id = pr.id
+	ORDER BY pr.provider, m.model`)
+	if err != nil {
+		return nil, fmt.Errorf("when listing models: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		m := Model{}
+		if err := rows.Scan(&m.ID, &m.UUID, &m.ProviderID, &m.Provider, &m.Model); err != nil {
+			return nil, fmt.Errorf("when scanning model: %w", err)
+		}
+		models = append(models, m)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("when iterating over models: %w", err)
+	}
+
+	return models, nil
+}
+
 func (r *RepositorySqlite) ListUserModels(ctx context.Context, userID int) ([]UserModel, error) {
 	models := []UserModel{}
 
@@ -880,6 +908,75 @@ func (r *RepositorySqlite) ListProjektoveOrganizations(ctx context.Context) ([]P
 	}
 
 	return orgs, nil
+}
+
+func (r *RepositorySqlite) StoreProjektoveOrganization(ctx context.Context, name, apiURL, browserURL string) (int, error) {
+	result, err := r.DB.ExecContext(ctx, "INSERT INTO projektove_organizations (name, api_url, browser_url) VALUES (?, ?, ?)", name, apiURL, browserURL)
+	if err != nil {
+		return 0, fmt.Errorf("failed to store projektove organization: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get last insert id: %w", err)
+	}
+
+	return int(id), nil
+}
+
+func (r *RepositorySqlite) GetProjektoveOrganization(ctx context.Context, id int) (ProjektoveOrganization, error) {
+	o := ProjektoveOrganization{}
+	err := r.DB.QueryRowContext(ctx, "SELECT id, name, api_url, browser_url FROM projektove_organizations WHERE id = ?", id).Scan(&o.ID, &o.Name, &o.APIURL, &o.BrowserURL)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ProjektoveOrganization{}, ErrOrganizationNotFound
+		}
+		return ProjektoveOrganization{}, fmt.Errorf("when getting projektove organization: %w", err)
+	}
+
+	return o, nil
+}
+
+func (r *RepositorySqlite) UpdateProjektoveOrganization(ctx context.Context, id int, name, apiURL, browserURL string) error {
+	result, err := r.DB.ExecContext(ctx, "UPDATE projektove_organizations SET name = ?, api_url = ?, browser_url = ? WHERE id = ?", name, apiURL, browserURL, id)
+	if err != nil {
+		return fmt.Errorf("failed to update projektove organization: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrOrganizationNotFound
+	}
+
+	return nil
+}
+
+func (r *RepositorySqlite) StoreOrganizationUser(ctx context.Context, orgID int, name string, projektoveID int) error {
+	if _, err := r.DB.ExecContext(ctx, "INSERT INTO projektove_organizations_users (organization_id, name, projektove_id) VALUES (?, ?, ?)", orgID, name, projektoveID); err != nil {
+		return fmt.Errorf("failed to store organization user: %w", err)
+	}
+
+	return nil
+}
+
+func (r *RepositorySqlite) DeleteOrganizationUser(ctx context.Context, orgID int, id int) error {
+	result, err := r.DB.ExecContext(ctx, "DELETE FROM projektove_organizations_users WHERE id = ? AND organization_id = ?", id, orgID)
+	if err != nil {
+		return fmt.Errorf("failed to delete organization user: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrOrganizationNotFound
+	}
+
+	return nil
 }
 
 func (r *RepositorySqlite) StoreIssue(ctx context.Context, org UserProjektoveOrganization, issue IssueCreate) (int, error) {

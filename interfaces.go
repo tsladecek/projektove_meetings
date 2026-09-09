@@ -54,6 +54,7 @@ type Repository interface {
 	ListProviders(ctx context.Context) ([]Provider, error)
 	GetOrCreateProvider(ctx context.Context, provider string) (int, error)
 	GetOrCreateModel(ctx context.Context, providerID int, model string) (int, string, error)
+	ListModels(ctx context.Context) ([]Model, error)
 	ListUserModels(ctx context.Context, userID int) ([]UserModel, error)
 	GetUserModelByUUID(ctx context.Context, userID int, uuid string) (UserModel, error)
 	GetUserModelByModelID(ctx context.Context, userID int, modelID int) (UserModel, error)
@@ -67,6 +68,11 @@ type Repository interface {
 	UpdateUserOrganizationToken(ctx context.Context, userID int, uuid string, token string) error
 	ListOrganizationUsers(ctx context.Context, orgID int) ([]ProjektoveOrganizationUser, error)
 	ListProjektoveOrganizations(ctx context.Context) ([]ProjektoveOrganization, error)
+	GetProjektoveOrganization(ctx context.Context, id int) (ProjektoveOrganization, error)
+	StoreProjektoveOrganization(ctx context.Context, name, apiURL, browserURL string) (int, error)
+	UpdateProjektoveOrganization(ctx context.Context, id int, name, apiURL, browserURL string) error
+	StoreOrganizationUser(ctx context.Context, orgID int, name string, projektoveID int) error
+	DeleteOrganizationUser(ctx context.Context, orgID int, id int) error
 }
 
 type Tokens struct {

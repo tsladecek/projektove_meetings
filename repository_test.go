@@ -1055,3 +1055,118 @@ func TestGetIssue_ParentNotOwned(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrParentDoesNotBelongToUser))
 }
+
+func TestStoreProjektoveOrganization(t *testing.T) {
+	repo := newRepository(t)
+
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+	require.NotZero(t, id)
+
+	orgs, err := repo.ListProjektoveOrganizations(t.Context())
+	require.NoError(t, err)
+	require.Len(t, orgs, 1)
+	assert.Equal(t, id, orgs[0].ID)
+	assert.Equal(t, "acme", orgs[0].Name)
+	assert.Equal(t, "https://api.example.com", orgs[0].APIURL)
+	assert.Equal(t, "https://app.example.com", orgs[0].BrowserURL)
+}
+
+func TestGetProjektoveOrganization(t *testing.T) {
+	repo := newRepository(t)
+
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	got, err := repo.GetProjektoveOrganization(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, id, got.ID)
+	assert.Equal(t, "acme", got.Name)
+
+	_, err = repo.GetProjektoveOrganization(t.Context(), 999)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
+}
+
+func TestUpdateProjektoveOrganization(t *testing.T) {
+	repo := newRepository(t)
+
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	require.NoError(t, repo.UpdateProjektoveOrganization(t.Context(), id, "acme2", "https://api2.example.com", "https://app2.example.com"))
+
+	got, err := repo.GetProjektoveOrganization(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, "acme2", got.Name)
+	assert.Equal(t, "https://api2.example.com", got.APIURL)
+	assert.Equal(t, "https://app2.example.com", got.BrowserURL)
+
+	err = repo.UpdateProjektoveOrganization(t.Context(), 999, "nope", "nope", "nope")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
+}
+
+func TestStoreOrganizationUser(t *testing.T) {
+	repo := newRepository(t)
+
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	require.NoError(t, repo.StoreOrganizationUser(t.Context(), id, "jane", 42))
+	require.NoError(t, repo.StoreOrganizationUser(t.Context(), id, "john", 43))
+
+	users, err := repo.ListOrganizationUsers(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, users, 2)
+	assert.Equal(t, "jane", users[0].Name)
+	assert.Equal(t, 42, users[0].ProjektoveID)
+	assert.Equal(t, "john", users[1].Name)
+}
+
+func TestDeleteOrganizationUser(t *testing.T) {
+	repo := newRepository(t)
+
+	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	require.NoError(t, err)
+
+	require.NoError(t, repo.StoreOrganizationUser(t.Context(), id, "jane", 42))
+	users, err := repo.ListOrganizationUsers(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+
+	require.NoError(t, repo.DeleteOrganizationUser(t.Context(), id, users[0].ID))
+
+	users, err = repo.ListOrganizationUsers(t.Context(), id)
+	require.NoError(t, err)
+	assert.Empty(t, users)
+
+	err = repo.DeleteOrganizationUser(t.Context(), 999, 1)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
+}
+
+func TestListModels(t *testing.T) {
+	repo := newRepository(t)
+
+	providerID1, err := repo.GetOrCreateProvider(t.Context(), "openai")
+	require.NoError(t, err)
+	providerID2, err := repo.GetOrCreateProvider(t.Context(), "googleai")
+	require.NoError(t, err)
+
+	_, _, err = repo.GetOrCreateModel(t.Context(), providerID1, "gpt-4o")
+	require.NoError(t, err)
+	_, _, err = repo.GetOrCreateModel(t.Context(), providerID2, "gemini")
+	require.NoError(t, err)
+
+	models, err := repo.ListModels(t.Context())
+	require.NoError(t, err)
+	require.Len(t, models, 2)
+
+	names := map[string]bool{}
+	for _, m := range models {
+		names[m.Provider+" / "+m.Model] = true
+	}
+	assert.True(t, names["openai / gpt-4o"])
+	assert.True(t, names["googleai / gemini"])
+}
