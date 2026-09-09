@@ -100,10 +100,11 @@ type ContextView struct {
 }
 
 type UserProfileView struct {
-	Email         string
-	Models        []UserModelView
-	Organizations []UserOrgView
-	Contexts      []ContextView
+	Email           string
+	Models          []UserModelView
+	AvailableModels []Model
+	Organizations   []UserOrgView
+	Contexts        []ContextView
 }
 
 type UserUpdateView struct {

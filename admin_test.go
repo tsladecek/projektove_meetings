@@ -234,3 +234,43 @@ func TestAdminCreateModel_AdminCreates(t *testing.T) {
 	require.Len(t, models, 1)
 	assert.Equal(t, "gpt-4o", models[0].Model)
 }
+
+func TestAddLLMModel_SelectValueSplitsProviderModel(t *testing.T) {
+	repo := newRepository(t)
+	handler, auth, user, _ := newAdminTestServer(t, repo)
+
+	rec := adminRequest(handler, auth, user, http.MethodPost, "/api/models", url.Values{
+		"model": {"openai/gpt-4o"},
+		"token": {"secret-token"},
+	}.Encode())
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `name="model_provider"`)
+	assert.Contains(t, rec.Body.String(), `value="openai"`)
+	assert.Contains(t, rec.Body.String(), `value="gpt-4o"`)
+	assert.Contains(t, rec.Body.String(), `value="secret-token"`)
+}
+
+func TestAddLLMModel_InvalidSelectValue(t *testing.T) {
+	repo := newRepository(t)
+	handler, auth, user, _ := newAdminTestServer(t, repo)
+
+	rec := adminRequest(handler, auth, user, http.MethodPost, "/api/models", url.Values{
+		"model": {"not-a-valid-value"},
+		"token": {"secret-token"},
+	}.Encode())
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestUserPage_RendersModelSelect(t *testing.T) {
+	repo := newRepository(t)
+	handler, auth, user, _ := newAdminTestServer(t, repo)
+	providerID, err := repo.GetOrCreateProvider(t.Context(), "openai")
+	require.NoError(t, err)
+	_, _, err = repo.GetOrCreateModel(t.Context(), providerID, "gpt-4o")
+	require.NoError(t, err)
+
+	rec := adminRequest(handler, auth, user, http.MethodGet, "/user", "")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `value="openai/gpt-4o"`)
+	assert.Contains(t, rec.Body.String(), `name="model"`)
+}

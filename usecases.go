@@ -205,6 +205,12 @@ func (c Controller) GetUserProfile(ctx context.Context, user User) (UserProfileV
 		profile.Models = append(profile.Models, UserModelView{ID: m.UUID, Provider: m.Provider, Model: m.Model, Token: m.Token})
 	}
 
+	availableModels, err := c.Repository.ListModels(ctx)
+	if err != nil {
+		return UserProfileView{}, fmt.Errorf("when listing available models: %w", err)
+	}
+	profile.AvailableModels = availableModels
+
 	orgs, err := c.Repository.ListUserProjektoveOrganizations(ctx, user.ID)
 	if err != nil {
 		return UserProfileView{}, fmt.Errorf("when listing user organizations: %w", err)

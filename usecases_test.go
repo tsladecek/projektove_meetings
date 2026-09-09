@@ -859,6 +859,42 @@ func TestControllerGetIssueViewByUUID(t *testing.T) {
 	assert.Equal(t, IssueStatusCreated, view.Status)
 }
 
+func TestControllerGetUserProfile(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	storeUserModel(t, repo, user, "openai", "gpt-4o", "g-token")
+
+	providerID, err := repo.GetOrCreateProvider(t.Context(), "googleai")
+	require.NoError(t, err)
+	_, _, err = repo.GetOrCreateModel(t.Context(), providerID, "gemini")
+	require.NoError(t, err)
+
+	c := Controller{Repository: repo}
+	profile, err := c.GetUserProfile(t.Context(), user)
+	require.NoError(t, err)
+	assert.Equal(t, "user@email.com", profile.Email)
+	require.Len(t, profile.Models, 1)
+	assert.Equal(t, "openai", profile.Models[0].Provider)
+
+	require.Len(t, profile.AvailableModels, 2)
+	names := map[string]bool{}
+	for _, m := range profile.AvailableModels {
+		names[m.Provider+"/"+m.Model] = true
+	}
+	assert.True(t, names["openai/gpt-4o"])
+	assert.True(t, names["googleai/gemini"])
+}
+
+func TestControllerGetUserProfile_NoAvailableModels(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+
+	c := Controller{Repository: repo}
+	profile, err := c.GetUserProfile(t.Context(), user)
+	require.NoError(t, err)
+	assert.Empty(t, profile.AvailableModels)
+}
+
 func TestControllerListAdminOrganizations(t *testing.T) {
 	repo := newRepository(t)
 	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")

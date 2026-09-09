@@ -819,6 +819,11 @@
       grid-template-columns: 1fr 1fr 1fr auto;
     }
   }
+  .lg\:grid-cols-\[1fr_1fr_auto\] {
+    @media (width >= 64rem) {
+      grid-template-columns: 1fr 1fr auto;
+    }
+  }
   .lg\:grid-rows-1 {
     @media (width >= 64rem) {
       grid-template-rows: repeat(1, minmax(0, 1fr));

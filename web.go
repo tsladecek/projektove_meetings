@@ -786,9 +786,15 @@ func (a api) addLLMModel() http.HandlerFunc {
 			return
 		}
 
+		parts := strings.SplitN(r.Form.Get("model"), "/", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			WriteError(w, "invalid model selection", http.StatusBadRequest, nil)
+			return
+		}
+
 		m := UserModelView{
-			Provider: r.Form.Get("provider"),
-			Model:    r.Form.Get("model"),
+			Provider: parts[0],
+			Model:    parts[1],
 			Token:    r.Form.Get("token"),
 		}
 		a.components.ModelRow(m).Render(w)
@@ -1794,6 +1800,17 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 		orgRows = append(orgRows, c.OrgRow(o))
 	}
 
+	modelOpts := []g.Node{}
+	for _, m := range profile.AvailableModels {
+		label := m.Provider + "/" + m.Model
+		modelOpts = append(modelOpts, h.Option(h.Value(label), g.Text(label)))
+	}
+	if len(modelOpts) == 0 {
+		modelOpts = append(modelOpts, h.Option(h.Value(""), h.Disabled(), g.Text("No models available")))
+	} else {
+		modelOpts = append([]g.Node{h.Option(h.Value(""), h.Disabled(), h.Selected(), g.Text("Select model"))}, modelOpts...)
+	}
+
 	return h.Div(
 		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("User")),
 
@@ -1828,9 +1845,8 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 			htmx.Target("#models-list"),
 			htmx.Swap("beforeend"),
 			htmx.On("htmx:after:request", "this.reset()"),
-			h.Class("grid grid-rows-4 lg:grid-cols-[1fr_1fr_1fr_auto] gap-2 mt-4"),
-			h.Select(h.Name("provider"), h.Placeholder("provider"), h.Class("px-2 py-1 border rounded"), h.Required(), h.Option(h.Value("googleai"), g.Text("google"))),
-			h.Input(h.Type("text"), h.Name("model"), h.Placeholder("model"), h.Class("px-2 py-1 border rounded"), h.Required()),
+			h.Class("grid grid-rows-3 lg:grid-cols-[1fr_1fr_auto] gap-2 mt-4"),
+			h.Select(h.Name("model"), h.Class("px-2 py-1 border rounded"), h.Required(), g.Group(modelOpts)),
 			h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
 			c.AddButton("Add model", h.Type("submit")),
 		),
