@@ -1793,13 +1793,12 @@ func (c components) AdminModelsPage(providers []Provider, models []Model, valida
 func (c components) AdminModelsContent(providers []Provider, models []Model) g.Node {
 	return h.Div(
 		h.ID("admin-models-content"),
-		h.Class("space-y-6"),
+		h.Class("space-y-6 w-full max-w-2xl"),
 		c.AdminProviderForm(),
 		c.AdminModelsForm(providers),
 		c.AdminModelsList(providers, models),
 	)
 }
-
 func (c components) AdminProviderForm() g.Node {
 	return h.Form(
 		h.ID("add-provider-form"),
@@ -1807,13 +1806,13 @@ func (c components) AdminProviderForm() g.Node {
 		htmx.Post(c.endpoints.adminCreateProvider.Path()),
 		htmx.Target("#admin-models-content"),
 		htmx.Swap("outerHTML"),
-		h.Class("flex gap-2 items-end max-w-2xl"),
+		h.Class("flex gap-2 items-end w-full"),
 		h.Div(
 			h.Class("space-y-1 flex-1"),
 			h.Label(h.Class("block text-sm font-medium"), g.Text("New provider")),
-			h.Input(h.Name("provider"), h.Placeholder("e.g. openai"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			h.Input(h.Name("provider"), h.Placeholder("e.g. openai"), h.Required(), h.Class("w-full h-10 px-3 py-2 text-sm leading-none border rounded box-border")),
 		),
-		c.AddButton("Add provider", h.Type("submit")),
+		c.AddButton("Add", h.Type("submit")),
 	)
 }
 
@@ -1835,19 +1834,20 @@ func (c components) AdminModelsForm(providers []Provider) g.Node {
 		htmx.Target("#admin-models-list"),
 		htmx.Swap("outerHTML"),
 		htmx.On("htmx:after:request", "this.reset()"),
+		h.Class("flex gap-2 items-end w-full"),
 		h.Div(
-			h.Class("flex flex-wrap gap-2 items-end max-w-2xl"),
+			h.Class("flex gap-2 items-end w-full grid grid-cols-[1fr_1fr_auto]"),
 			h.Div(
 				h.Class("space-y-1"),
 				h.Label(h.Class("block text-sm font-medium"), g.Text("Provider")),
-				h.Select(h.Name("provider"), h.Required(), h.Class("px-3 py-2 border rounded min-w-48"), g.Group(opts)),
+				h.Select(h.Name("provider"), h.Required(), h.Class("h-10 px-3 py-2 text-sm leading-none border rounded w-full box-border bg-white"), g.Group(opts)),
 			),
 			h.Div(
 				h.Class("space-y-1"),
 				h.Label(h.Class("block text-sm font-medium"), g.Text("Model")),
-				h.Input(h.Name("model"), h.Placeholder("e.g. gpt-4o"), h.Required(), h.Class("px-3 py-2 border rounded")),
+				h.Input(h.Name("model"), h.Placeholder("e.g. gpt-4o"), h.Required(), h.Class("w-full h-10 px-3 py-2 text-sm leading-none border rounded box-border")),
 			),
-			c.AddButton("Add model", h.Type("submit")),
+			c.AddButton("Add", h.Type("submit")),
 		),
 	)
 }
@@ -2388,7 +2388,7 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 		})
 		meta := h.Span()
 		if iss.ProjektoveID != nil {
-			meta = h.A(h.Class("underline"), h.Target("_blank"), h.Href(browserURL+"/issues/"+strconv.Itoa(*iss.ProjektoveID)), g.Text("Projektove #"+strconv.Itoa(*iss.ProjektoveID)))
+			meta = h.A(h.Class("underline"), h.Target("_blank"), h.Href(browserURL+"/tasks/"+strconv.Itoa(*iss.ProjektoveID)), g.Text("Projektove #"+strconv.Itoa(*iss.ProjektoveID)))
 		}
 		return h.Div(
 			h.ID(cardID),
