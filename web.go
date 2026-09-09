@@ -60,13 +60,12 @@ type endpoints struct {
 }
 
 type components struct {
-	endpoints               endpoints
-	projektoveIssueEndpoint string
+	endpoints endpoints
 
 	endpointLogout Endpoint
 }
 
-func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssueEndpoint string, logoutEndpoint Endpoint) http.Handler {
+func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint Endpoint) http.Handler {
 	m := http.NewServeMux()
 
 	burl, err := url.Parse(baseURL)
@@ -111,7 +110,7 @@ func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssu
 		ignoreIssue: endAPI(http.MethodPut, "/issues/{id}/ignore"),
 	}
 
-	c := components{endpoints: e, projektoveIssueEndpoint: projektoveIssueEndpoint, endpointLogout: logoutEndpoint}
+	c := components{endpoints: e, endpointLogout: logoutEndpoint}
 	a := api{controller: controller, basePath: burl.Path, components: c}
 
 	type endpointHandler struct {
@@ -242,7 +241,19 @@ func (a api) newPrompt() http.HandlerFunc {
 			return
 		}
 
-		a.components.Page(a.components.NewPromptPage(contexts, user.LLMModels, nil)).Render(w)
+		models, err := a.controller.Repository.ListUserModels(r.Context(), user.ID)
+		if err != nil {
+			WriteError(w, "failed to load models", http.StatusInternalServerError, err)
+			return
+		}
+
+		orgs, err := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+		if err != nil {
+			WriteError(w, "failed to load organizations", http.StatusInternalServerError, err)
+			return
+		}
+
+		a.components.Page(a.components.NewPromptPage(contexts, models, orgs, nil)).Render(w)
 	}
 }
 
@@ -266,12 +277,23 @@ func (a api) prompt() http.HandlerFunc {
 			return
 		}
 
-		projects, err := a.controller.ListProjects(r.Context(), user)
+		org, err := a.resolveUserOrg(r.Context(), user, view.OrgID)
+		if err != nil {
+			WriteError(w, "failed to resolve organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		projects, err := a.controller.ListProjects(r.Context(), org)
 		if err != nil {
 			projects = []ProjectOptionView{}
 		}
 
-		fragment := a.components.PromptFragment(view, projects, a.controller.Users)
+		orgUsers, err := a.controller.ListOrgUsers(r.Context(), org)
+		if err != nil {
+			orgUsers = []ProjektoveUser{}
+		}
+
+		fragment := a.components.PromptFragment(view, projects, orgUsers, org.BrowserURL)
 		if r.Header.Get("HX-Request") != "" {
 			fragment.Render(w)
 			return
@@ -314,7 +336,19 @@ func (a api) batches() http.HandlerFunc {
 
 func (a api) newBatch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.components.Page(a.components.NewBatchPage(nil)).Render(w)
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		orgs, err := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+		if err != nil {
+			WriteError(w, "failed to load organizations", http.StatusInternalServerError, err)
+			return
+		}
+
+		a.components.Page(a.components.NewBatchPage(orgs, nil)).Render(w)
 	}
 }
 
@@ -338,12 +372,23 @@ func (a api) batch() http.HandlerFunc {
 			return
 		}
 
-		projects, err := a.controller.ListProjects(r.Context(), user)
+		org, err := a.resolveUserOrg(r.Context(), user, view.OrgID)
+		if err != nil {
+			WriteError(w, "failed to resolve organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		projects, err := a.controller.ListProjects(r.Context(), org)
 		if err != nil {
 			projects = []ProjectOptionView{}
 		}
 
-		fragment := a.components.BatchFragment(view, projects, a.controller.Users)
+		orgUsers, err := a.controller.ListOrgUsers(r.Context(), org)
+		if err != nil {
+			orgUsers = []ProjektoveUser{}
+		}
+
+		fragment := a.components.BatchFragment(view, projects, orgUsers, org.BrowserURL)
 		if r.Header.Get("HX-Request") != "" {
 			fragment.Render(w)
 			return
@@ -368,27 +413,43 @@ func (a api) updateUser() http.HandlerFunc {
 		}
 
 		v := UserUpdateView{
-			ProjektoveToken: r.Form.Get("projektove_token"),
-			Models:          []LLMModelView{},
+			Models:        []UserModelView{},
+			Organizations: []UserOrgTokenView{},
 		}
 
+		uuids := r.Form["model_uuid"]
 		providers := r.Form["model_provider"]
 		names := r.Form["model_name"]
 		tokens := r.Form["model_token"]
 		for i := range providers {
 			name := ""
 			token := ""
+			uuid := ""
 			if i < len(names) {
 				name = names[i]
 			}
 			if i < len(tokens) {
 				token = tokens[i]
 			}
-			v.Models = append(v.Models, LLMModelView{
-				Provider: LLMProvider(providers[i]),
+			if i < len(uuids) {
+				uuid = uuids[i]
+			}
+			v.Models = append(v.Models, UserModelView{
+				ID:       uuid,
+				Provider: providers[i],
 				Model:    name,
 				Token:    token,
 			})
+		}
+
+		orgUUIDs := r.Form["org_uuid"]
+		orgTokens := r.Form["org_token"]
+		for i := range orgUUIDs {
+			token := ""
+			if i < len(orgTokens) {
+				token = orgTokens[i]
+			}
+			v.Organizations = append(v.Organizations, UserOrgTokenView{ID: orgUUIDs[i], Token: token})
 		}
 
 		if err := a.controller.UpdateUser(r.Context(), user, v); err != nil {
@@ -457,8 +518,8 @@ func (a api) addLLMModel() http.HandlerFunc {
 			return
 		}
 
-		m := LLMModelView{
-			Provider: LLMProvider(r.Form.Get("provider")),
+		m := UserModelView{
+			Provider: r.Form.Get("provider"),
 			Model:    r.Form.Get("model"),
 			Token:    r.Form.Get("token"),
 		}
@@ -493,13 +554,12 @@ func (a api) createPrompt() http.HandlerFunc {
 			return
 		}
 
-		model := r.Form.Get("model")
-		parts := strings.SplitN(model, "|", 2)
-		if len(parts) != 2 {
-			WriteError(w, "invalid model", http.StatusBadRequest, nil)
+		modelUUID := r.Form.Get("model")
+		orgUUID := r.Form.Get("organization")
+		if modelUUID == "" || orgUUID == "" {
+			WriteError(w, "invalid model or organization", http.StatusBadRequest, nil)
 			return
 		}
-		provider, name := parts[0], parts[1]
 
 		file, _, err := r.FormFile("meeting")
 		if err != nil {
@@ -514,7 +574,7 @@ func (a api) createPrompt() http.HandlerFunc {
 			return
 		}
 
-		promptUUID, err := a.controller.CreatePrompt(r.Context(), user, provider, name, context.ID, string(meeting))
+		promptUUID, err := a.controller.CreatePrompt(r.Context(), user, modelUUID, orgUUID, context.ID, string(meeting))
 		if err != nil {
 			if errors.Is(err, ErrProjektoveTokenNotConfigured) {
 				contexts, ctxErr := a.controller.ListContexts(r.Context(), user)
@@ -522,12 +582,22 @@ func (a api) createPrompt() http.HandlerFunc {
 					WriteError(w, "failed to load contexts", http.StatusInternalServerError, ctxErr)
 					return
 				}
-				a.components.Page(a.components.NewPromptPage(contexts, user.LLMModels, []string{
-					"Your Projektove token is not configured. Set it on the User page before creating a prompt.",
+				models, mErr := a.controller.Repository.ListUserModels(r.Context(), user.ID)
+				if mErr != nil {
+					WriteError(w, "failed to load models", http.StatusInternalServerError, mErr)
+					return
+				}
+				orgs, oErr := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+				if oErr != nil {
+					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
+					return
+				}
+				a.components.Page(a.components.NewPromptPage(contexts, models, orgs, []string{
+					"The Projektove organization token is not configured. Set it on the User page before creating a prompt.",
 				})).Render(w)
 				return
 			}
-			if errors.Is(err, ErrModelNotFound) {
+			if errors.Is(err, ErrUserModelNotFound) {
 				WriteError(w, "llm model not found", http.StatusNotFound, err)
 				return
 			}
@@ -553,6 +623,12 @@ func (a api) createBatch() http.HandlerFunc {
 			return
 		}
 
+		orgUUID := r.Form.Get("organization")
+		if orgUUID == "" {
+			WriteError(w, "invalid organization", http.StatusBadRequest, nil)
+			return
+		}
+
 		file, _, err := r.FormFile("csv")
 		if err != nil {
 			WriteError(w, "invalid csv file", http.StatusBadRequest, err)
@@ -566,18 +642,28 @@ func (a api) createBatch() http.HandlerFunc {
 			return
 		}
 
-		batchUUID, err := a.controller.CreateBatch(r.Context(), user, string(raw))
+		batchUUID, err := a.controller.CreateBatch(r.Context(), user, orgUUID, string(raw))
 		if err != nil {
 			if errors.Is(err, ErrProjektoveTokenNotConfigured) {
-				a.components.Page(a.components.NewBatchPage([]string{
-					"Your Projektove token is not configured. Set it on the User page before uploading a batch.",
+				orgs, oErr := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+				if oErr != nil {
+					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
+					return
+				}
+				a.components.Page(a.components.NewBatchPage(orgs, []string{
+					"The Projektove organization token is not configured. Set it on the User page before uploading a batch.",
 				})).Render(w)
 				return
 			}
 
 			var csvErr *BatchCSVError
 			if errors.As(err, &csvErr) {
-				a.components.Page(a.components.NewBatchPage(csvErr.Messages)).Render(w)
+				orgs, oErr := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+				if oErr != nil {
+					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
+					return
+				}
+				a.components.Page(a.components.NewBatchPage(orgs, csvErr.Messages)).Render(w)
 				return
 			}
 			WriteError(w, "failed to create batch", http.StatusInternalServerError, err)
@@ -612,15 +698,37 @@ func parseIssueFields(r *http.Request) IssueUpdateView {
 	}
 }
 
-func (a api) renderIssueCard(ctx context.Context, w http.ResponseWriter, user User, issueUUID string, projects []ProjectOptionView, errMsg string) {
+func (a api) resolveUserOrg(ctx context.Context, user User, uuid string) (UserProjektoveOrganization, error) {
+	orgs, err := a.controller.Repository.ListUserProjektoveOrganizations(ctx, user.ID)
+	if err != nil {
+		return UserProjektoveOrganization{}, err
+	}
+	for _, o := range orgs {
+		if o.UUID == uuid {
+			return o, nil
+		}
+	}
+	return UserProjektoveOrganization{}, ErrOrganizationNotFound
+}
+
+func (a api) renderIssueCard(ctx context.Context, w http.ResponseWriter, user User, org UserProjektoveOrganization, issueUUID string, projects []ProjectOptionView, errMsg string) {
 	iss, err := a.controller.GetIssueViewByUUID(ctx, user, issueUUID)
 	if err != nil {
 		WriteError(w, "issue not found", http.StatusNotFound, nil)
 		return
 	}
 
+	orgUsers, err := a.controller.ListOrgUsers(ctx, org)
+	if err != nil {
+		orgUsers = []ProjektoveUser{}
+	}
+
 	iss.Error = errMsg
-	a.components.IssueCard(iss, projects, a.controller.Users).Render(w)
+	a.components.IssueCard(iss, projects, orgUsers, org.BrowserURL).Render(w)
+}
+
+func (a api) issueOrg(ctx context.Context, user User, issueUUID string) (UserProjektoveOrganization, error) {
+	return a.controller.GetIssueOrg(ctx, user, issueUUID)
 }
 
 func (a api) updateIssue() http.HandlerFunc {
@@ -637,29 +745,32 @@ func (a api) updateIssue() http.HandlerFunc {
 		}
 
 		issueUUID := r.PathValue("id")
+		org, err := a.issueOrg(r.Context(), user, issueUUID)
+		if err != nil {
+			WriteError(w, "issue not found", http.StatusNotFound, nil)
+			return
+		}
+		projects, _ := a.controller.ListProjects(r.Context(), org)
 
 		v := parseIssueFields(r)
 
 		if err := a.controller.UpdateIssue(r.Context(), user, issueUUID, v); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
-				projects, _ := a.controller.ListProjects(r.Context(), user)
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			default:
-				projects, _ := a.controller.ListProjects(r.Context(), user)
 				w.Header().Set("X-Error", "Failed to update issue")
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Failed to update issue")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "Failed to update issue")
 				return
 			}
 		}
 
 		withSuccessToast(w)
-		projects, _ := a.controller.ListProjects(r.Context(), user)
-		a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+		a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 	}
 }
 
@@ -677,21 +788,26 @@ func (a api) submitIssue() http.HandlerFunc {
 		}
 
 		issueUUID := r.PathValue("id")
+		org, err := a.issueOrg(r.Context(), user, issueUUID)
+		if err != nil {
+			WriteError(w, "issue not found", http.StatusNotFound, nil)
+			return
+		}
+		projects, _ := a.controller.ListProjects(r.Context(), org)
 
 		v := parseIssueFields(r)
-		projects, _ := a.controller.ListProjects(r.Context(), user)
 
 		if err := a.controller.UpdateIssue(r.Context(), user, issueUUID, v); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			default:
 				w.Header().Set("X-Error", "Failed to update issue")
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Failed to update issue")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "Failed to update issue")
 				return
 			}
 		}
@@ -699,24 +815,24 @@ func (a api) submitIssue() http.HandlerFunc {
 		if err := a.controller.SubmitIssue(r.Context(), user, issueUUID); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			case errors.Is(err, ErrIssueIncomplete):
 				w.Header().Set("X-Error", "Cannot submit: missing required fields")
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Cannot submit: missing required fields")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "Cannot submit: missing required fields")
 				return
 			default:
 				w.Header().Set("X-Error", "Failed to submit issue")
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Failed to submit issue")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "Failed to submit issue")
 				return
 			}
 		}
 
 		withSuccessToast(w)
-		a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+		a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 	}
 }
 
@@ -729,28 +845,33 @@ func (a api) ignoreIssue() http.HandlerFunc {
 		}
 
 		issueUUID := r.PathValue("id")
-		projects, _ := a.controller.ListProjects(r.Context(), user)
+		org, err := a.issueOrg(r.Context(), user, issueUUID)
+		if err != nil {
+			WriteError(w, "issue not found", http.StatusNotFound, nil)
+			return
+		}
+		projects, _ := a.controller.ListProjects(r.Context(), org)
 
 		if err := a.controller.IgnoreIssue(r.Context(), user, issueUUID); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueIgnored):
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			default:
 				w.Header().Set("X-Error", "Failed to ignore issue")
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "Failed to ignore issue")
 				return
 			}
 		}
 
 		withSuccessToast(w)
-		a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+		a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 	}
 }
 
@@ -1075,7 +1196,12 @@ func promptStatusDisplay(status PromptStatus) (string, string) {
 func (c components) UserPage(profile UserProfileView) g.Node {
 	modelRows := []g.Node{}
 	for _, m := range profile.Models {
-		modelRows = append(modelRows, c.ModelRow(LLMModelView{Provider: m.Provider, Model: m.Model, Token: m.Token}))
+		modelRows = append(modelRows, c.ModelRow(UserModelView{ID: m.ID, Provider: m.Provider, Model: m.Model, Token: m.Token}))
+	}
+
+	orgRows := []g.Node{}
+	for _, o := range profile.Organizations {
+		orgRows = append(orgRows, c.OrgRow(o))
 	}
 
 	return h.Div(
@@ -1090,13 +1216,9 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 
 			h.Div(
 				h.Class("space-y-2"),
-				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove token")),
-				h.Input(
-					h.Type("text"),
-					h.Name("projektove_token"),
-					h.Value(profile.ProjektoveToken),
-					h.Class("w-full px-3 py-2 border rounded"),
-				),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove organizations")),
+				h.P(h.Class("text-sm text-gray-500"), g.Text("Set the API token for each organization you belong to.")),
+				h.Div(h.ID("organizations-list"), h.Class("space-y-2"), g.Group(orgRows)),
 			),
 
 			h.Div(
@@ -1159,7 +1281,7 @@ func (c components) contextRows(contexts []ContextView) []g.Node {
 	return rows
 }
 
-func (c components) NewPromptPage(contexts []ContextView, models []LLMModel, validationErrors []string) g.Node {
+func (c components) NewPromptPage(contexts []ContextView, models []UserModel, orgs []UserProjektoveOrganization, validationErrors []string) g.Node {
 	nodes := []g.Node{}
 
 	if len(validationErrors) > 0 {
@@ -1178,9 +1300,13 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel, val
 
 	modelOpts := []g.Node{}
 	for _, m := range models {
-		value := string(m.Provider) + "|" + m.Model
-		label := string(m.Provider) + " / " + m.Model
-		modelOpts = append(modelOpts, h.Option(h.Value(value), g.Text(label)))
+		label := m.Provider + " / " + m.Model
+		modelOpts = append(modelOpts, h.Option(h.Value(m.UUID), g.Text(label)))
+	}
+
+	orgOpts := []g.Node{}
+	for _, o := range orgs {
+		orgOpts = append(orgOpts, h.Option(h.Value(o.UUID), g.Text(o.OrgName)))
 	}
 
 	contextOpts := []g.Node{}
@@ -1196,6 +1322,17 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel, val
 			h.Action(c.endpoints.createPrompt.Path()),
 			h.EncType("multipart/form-data"),
 			h.Class("space-y-6 max-w-2xl"),
+
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove organization")),
+				h.Select(
+					h.Name("organization"),
+					h.Required(),
+					h.Class("w-full px-3 py-2 border rounded"),
+					g.Group(orgOpts),
+				),
+			),
 
 			h.Div(
 				h.Class("space-y-2"),
@@ -1238,7 +1375,7 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel, val
 	return h.Div(g.Group(nodes))
 }
 
-func (c components) NewBatchPage(validationErrors []string) g.Node {
+func (c components) NewBatchPage(orgs []UserProjektoveOrganization, validationErrors []string) g.Node {
 	nodes := []g.Node{}
 
 	if len(validationErrors) > 0 {
@@ -1255,6 +1392,11 @@ func (c components) NewBatchPage(validationErrors []string) g.Node {
 		)
 	}
 
+	orgOpts := []g.Node{}
+	for _, o := range orgs {
+		orgOpts = append(orgOpts, h.Option(h.Value(o.UUID), g.Text(o.OrgName)))
+	}
+
 	nodes = append(nodes,
 		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("New batch")),
 		h.Form(
@@ -1262,6 +1404,16 @@ func (c components) NewBatchPage(validationErrors []string) g.Node {
 			h.Action(c.endpoints.createBatch.Path()),
 			h.EncType("multipart/form-data"),
 			h.Class("space-y-6 max-w-2xl"),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove organization")),
+				h.Select(
+					h.Name("organization"),
+					h.Required(),
+					h.Class("w-full px-3 py-2 border rounded"),
+					g.Group(orgOpts),
+				),
+			),
 			h.Div(
 				h.Class("space-y-2"),
 				h.Label(h.Class("block text-sm font-medium"), g.Text("CSV table")),
@@ -1291,7 +1443,7 @@ func dateValue(t time.Time) string {
 	return t.Format("2006-01-02")
 }
 
-func (c components) PromptFragment(view PromptView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+func (c components) PromptFragment(view PromptView, projects []ProjectOptionView, users []ProjektoveUser, browserURL string) g.Node {
 	if view.Status.IsPending() {
 		return h.Div(
 			h.ID("prompt-view"),
@@ -1314,7 +1466,7 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 
 	issueCards := []g.Node{}
 	for _, iss := range view.Issues {
-		issueCards = append(issueCards, c.IssueCard(iss, projects, users))
+		issueCards = append(issueCards, c.IssueCard(iss, projects, users, browserURL))
 	}
 
 	nodes := []g.Node{
@@ -1390,10 +1542,10 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 	return h.Div(h.ID("prompt-view"), h.Class("flex flex-col gap-4"), g.Group(nodes))
 }
 
-func (c components) BatchFragment(view BatchView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+func (c components) BatchFragment(view BatchView, projects []ProjectOptionView, users []ProjektoveUser, browserURL string) g.Node {
 	issueCards := []g.Node{}
 	for _, iss := range view.Issues {
-		issueCards = append(issueCards, c.IssueCard(iss, projects, users))
+		issueCards = append(issueCards, c.IssueCard(iss, projects, users, browserURL))
 	}
 
 	nodes := []g.Node{
@@ -1441,7 +1593,7 @@ func (c components) BatchFragment(view BatchView, projects []ProjectOptionView, 
 	return h.Div(h.ID("batch-view"), h.Class("flex flex-col gap-4"), g.Group(nodes))
 }
 
-func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users []ProjektoveUser, browserURL string) g.Node {
 	cardID := "issue-" + iss.ID
 
 	if !iss.Editable {
@@ -1467,7 +1619,7 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 		})
 		meta := h.Span()
 		if iss.ProjektoveID != nil {
-			meta = h.A(h.Class("underline"), h.Target("_blank"), h.Href(fmt.Sprintf(c.projektoveIssueEndpoint, *iss.ProjektoveID)), g.Text("Projektove #"+strconv.Itoa(*iss.ProjektoveID)))
+			meta = h.A(h.Class("underline"), h.Target("_blank"), h.Href(browserURL+"/issues/"+strconv.Itoa(*iss.ProjektoveID)), g.Text("Projektove #"+strconv.Itoa(*iss.ProjektoveID)))
 		}
 		return h.Div(
 			h.ID(cardID),
@@ -1602,13 +1754,23 @@ func (c components) ContextRow(cx ContextView) g.Node {
 	)
 }
 
-func (c components) ModelRow(m LLMModelView) g.Node {
+func (c components) ModelRow(m UserModelView) g.Node {
 	return h.Div(
 		h.Class("model-row flex gap-2 items-center border rounded px-3 py-2 overflow-auto"),
-		h.Input(h.Type("text"), h.Name("model_provider"), h.Value(string(m.Provider)), h.Class("flex-1 px-2 py-1 border rounded")),
+		h.Input(h.Type("hidden"), h.Name("model_uuid"), h.Value(m.ID)),
+		h.Input(h.Type("text"), h.Name("model_provider"), h.Value(m.Provider), h.Class("flex-1 px-2 py-1 border rounded")),
 		h.Input(h.Type("text"), h.Name("model_name"), h.Value(m.Model), h.Class("flex-1 px-2 py-1 border rounded")),
 		h.Input(h.Type("text"), h.Name("model_token"), h.Value(m.Token), h.Class("flex-1 px-2 py-1 border rounded")),
 		c.DeleteButton(h.Type("button"), g.Attr("onclick", "this.closest('.model-row').remove()")),
+	)
+}
+
+func (c components) OrgRow(o UserOrgView) g.Node {
+	return h.Div(
+		h.Class("org-row flex gap-2 items-center border rounded px-3 py-2 overflow-auto"),
+		h.Input(h.Type("hidden"), h.Name("org_uuid"), h.Value(o.ID)),
+		h.Span(h.Class("flex-1 font-medium"), g.Text(o.Name)),
+		h.Input(h.Type("text"), h.Name("org_token"), h.Value(o.Token), h.Placeholder("token"), h.Class("flex-1 px-2 py-1 border rounded")),
 	)
 }
 

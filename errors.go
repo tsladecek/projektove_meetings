@@ -18,9 +18,12 @@ var (
 	ErrIssueSubmitted                     = errors.New("issue already submitted")
 	ErrIssueIgnored                       = errors.New("issue is ignored")
 	ErrModelNotFound                      = errors.New("model not found")
+	ErrUserModelNotFound                  = errors.New("user model not found")
 	ErrParentDoesNotBelongToUser          = errors.New("parent does not belong to user")
 	ErrIssueIncomplete                    = errors.New("issue is missing required fields")
 	ErrProjektoveTokenNotConfigured       = errors.New("projektove token is not configured")
+	ErrOrganizationNotFound               = errors.New("projektove organization not found")
+	ErrOrganizationNotConfigured          = errors.New("projektove organization is not configured")
 	ErrInvalidCredentials                 = errors.New("invalid credentials")
 )
 

@@ -4,38 +4,25 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
 )
 
 type ProjektoveAPI struct {
-	client  *Client
-	baseURL *url.URL
-	db      Repository
+	client *Client
 }
 
 type projektoveCreateBody struct {
 	Issue ProjektoveIssueCreate `json:"issue"`
 }
 
-func NewProjektoveAPI(baseURL string, client *Client, db Repository) (Projektove, error) {
-	burl, err := url.Parse(baseURL)
-	if err != nil {
-		return ProjektoveAPI{}, fmt.Errorf("when parsing projektove url %q: %w", baseURL, err)
-	}
-
+func NewProjektoveAPI(client *Client) (Projektove, error) {
 	if client == nil {
 		return ProjektoveAPI{}, fmt.Errorf("no http client provided")
 	}
 	return ProjektoveAPI{
-		baseURL: burl,
-		client:  client,
-		db:      db,
+		client: client,
 	}, nil
 }
 
@@ -43,12 +30,12 @@ type ResponseCreateIssue struct {
 	Issue ProjektoveIssue `json:"issue"`
 }
 
-func (p ProjektoveAPI) CreateIssue(ctx context.Context, user User, obj ProjektoveIssueCreate) (ProjektoveIssue, error) {
-	if strings.TrimSpace(user.ProjektoveToken) == "" {
+func (p ProjektoveAPI) CreateIssue(ctx context.Context, token, baseURL string, obj ProjektoveIssueCreate) (ProjektoveIssue, error) {
+	if strings.TrimSpace(token) == "" {
 		return ProjektoveIssue{}, ErrProjektoveTokenNotConfigured
 	}
 
-	u := p.baseURL.JoinPath("issues.json").String()
+	u := strings.TrimSuffix(baseURL, "/") + "/issues.json"
 
 	body := projektoveCreateBody{
 		Issue: obj,
@@ -63,7 +50,7 @@ func (p ProjektoveAPI) CreateIssue(ctx context.Context, user User, obj Projektov
 		return ProjektoveIssue{}, fmt.Errorf("when creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Authorization", user.ProjektoveToken)
+	req.Header.Set("X-API-Authorization", token)
 
 	response := ResponseCreateIssue{}
 
@@ -78,44 +65,23 @@ type ResponseProjects struct {
 	Projects []ProjektoveProject `json:"projects"`
 }
 
-func (p ProjektoveAPI) GetProjects(ctx context.Context, user User) ([]ProjektoveProject, error) {
-	if strings.TrimSpace(user.ProjektoveToken) == "" {
+func (p ProjektoveAPI) GetProjects(ctx context.Context, token, baseURL string) ([]ProjektoveProject, error) {
+	if strings.TrimSpace(token) == "" {
 		return nil, ErrProjektoveTokenNotConfigured
 	}
 
-	fromCache, err := p.db.ListProjects(ctx, user)
-	if err != nil {
-		if !errors.Is(err, ErrNoProjectsFound) {
-			return nil, fmt.Errorf("when loading projects from cache: %w", err)
-		}
-		slog.Debug("Projects not found in cache")
-	} else {
-		if time.Since(fromCache.FetchedAt) < time.Hour*48 {
-			return fromCache.Projects, nil
-		}
-		slog.Debug("Stale projects found in cache")
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL.JoinPath("projects.json").String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(baseURL, "/")+"/projects.json", nil)
 	if err != nil {
 		return nil, fmt.Errorf("when creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Authorization", user.ProjektoveToken)
+	req.Header.Set("X-API-Authorization", token)
 
 	projects := ResponseProjects{}
 
 	if _, err := p.client.Do(req, &projects); err != nil {
 		return nil, fmt.Errorf("when fetching projects: %w", err)
 	}
-
-	go func() {
-		ctxStore, cancelStore := context.WithTimeout(context.Background(), time.Second*5)
-		defer cancelStore()
-		if err := p.db.UpdateProjectsCache(ctxStore, user, projects.Projects); err != nil {
-			slog.Error("Received error when caching projects", "error", err.Error())
-		}
-	}()
 
 	return projects.Projects, nil
 }

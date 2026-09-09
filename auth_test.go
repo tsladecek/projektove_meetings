@@ -23,7 +23,7 @@ import (
 
 func createUser(t *testing.T, repo Repository, email string) User {
 	t.Helper()
-	_, err := repo.StoreUser(t.Context(), UserCreate{Email: email, ProjektoveToken: "token"})
+	_, err := repo.StoreUser(t.Context(), UserCreate{Email: email})
 	require.NoError(t, err)
 	user, err := repo.GetUser(t.Context(), email)
 	require.NoError(t, err)
@@ -203,8 +203,7 @@ func TestAuthenticate_AutoProvision(t *testing.T) {
 
 	stored, err := repo.GetUser(t.Context(), newEmail)
 	require.NoError(t, err)
-	assert.Equal(t, "", stored.ProjektoveToken)
-	assert.Empty(t, stored.LLMModels)
+	assert.Equal(t, newEmail, stored.Email)
 }
 
 func TestAuthenticate_InvalidToken(t *testing.T) {

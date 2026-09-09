@@ -41,22 +41,19 @@ type IssueUpdate struct {
 }
 
 type UserCreate struct {
-	Email           string
-	PasswordHash    *string
-	IsAdmin         bool
-	ProjektoveToken string
-	Models          []LLMModel
+	Email        string
+	PasswordHash *string
+	IsAdmin      bool
 }
 
 type UserUpdate struct {
-	ProjektoveToken string
-	UpdateModels    bool
-	Models          []LLMModel
+	IsAdmin *bool
 }
 
 type ProjectsCacheEntry struct {
-	Projects  []ProjektoveProject
-	FetchedAt time.Time
+	Projects                  []ProjektoveProject
+	FetchedAt                 time.Time
+	UserProjektoveOrgID       int
 }
 
 type LLMContextCreate struct {
@@ -65,15 +62,15 @@ type LLMContextCreate struct {
 }
 
 type PromptCreate struct {
-	Prompt      string
-	Result      string
-	Error       error
-	ContextID   int
-	Status      PromptStatus
-	Provider    string
-	Model       string
-	FileContent string
-	CreatedAt   time.Time
+	Prompt                        string
+	Result                        string
+	Error                         error
+	ContextID                     int
+	Status                        PromptStatus
+	ModelID                       int
+	FileContent                   string
+	CreatedAt                     time.Time
+	UserProjektoveOrganizationID  int
 }
 
 type PromptComplete struct {
@@ -83,10 +80,17 @@ type PromptComplete struct {
 	Status PromptStatus
 }
 
-type LLMModelView struct {
-	Provider LLMProvider
+type UserModelView struct {
+	ID       string
+	Provider string
 	Model    string
 	Token    string
+}
+
+type UserOrgView struct {
+	ID    string
+	Name  string
+	Token string
 }
 
 type ContextView struct {
@@ -96,15 +100,20 @@ type ContextView struct {
 }
 
 type UserProfileView struct {
-	Email           string
-	ProjektoveToken string
-	Models          []LLMModelView
-	Contexts        []ContextView
+	Email         string
+	Models        []UserModelView
+	Organizations []UserOrgView
+	Contexts      []ContextView
 }
 
 type UserUpdateView struct {
-	ProjektoveToken string
-	Models          []LLMModelView
+	Models        []UserModelView
+	Organizations []UserOrgTokenView
+}
+
+type UserOrgTokenView struct {
+	ID    string
+	Token string
 }
 
 type IssueView struct {
@@ -128,6 +137,8 @@ type PromptView struct {
 	Error       string
 	ContextName string
 	Status      PromptStatus
+	Model       string
+	OrgID       string
 	Issues      []IssueView
 }
 
@@ -177,5 +188,6 @@ type BatchView struct {
 	ID          string
 	FileContent string
 	CreatedAt   time.Time
+	OrgID       string
 	Issues      []IssueView
 }

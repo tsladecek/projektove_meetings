@@ -19,8 +19,6 @@ type Config struct {
 	Logging    ConfigLogging    `toml:"logging" env-prefix:"LOGGING_"`
 }
 
-type ProjektoveUsers []ProjektoveUser
-
 type ConfigLogging struct {
 	Level string `toml:"level" env:"LEVEL" env-default:"info"`
 }
@@ -45,9 +43,8 @@ type ConfigOIDC struct {
 }
 
 type ConfigProjektove struct {
-	URL           string          `toml:"url" env:"URL" env-required:"true" env-description:"api url"`
-	IssueEndpoint string          `toml:"issue_endpoint" env:"ISSUEENDPOINT" env-required:"true" env-description:"UI url to an issue, e.g. https://app.projektove.cz/<org>/tasks/%d"`
-	Users         ProjektoveUsers `toml:"users" env:"USERS" env-required:"true"`
+	URL           string `toml:"url" env:"URL" env-required:"true" env-description:"api url"`
+	IssueEndpoint string `toml:"issue_endpoint" env:"ISSUEENDPOINT" env-required:"true" env-description:"UI url to an issue, e.g. https://app.projektove.cz/<org>/tasks/%d"`
 }
 
 func NewConfig(configPath string) (Config, error) {

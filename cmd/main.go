@@ -45,12 +45,12 @@ func run() error {
 		return fmt.Errorf("when constructing data repository adapter: %w", err)
 	}
 
-	projektove, err := projektovemeeting.NewProjektoveAPI(config.Projektove.URL, client, repo)
+	projektove, err := projektovemeeting.NewProjektoveAPI(client)
 	if err != nil {
 		return fmt.Errorf("when constructing projektove adapter: %w", err)
 	}
 
-	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, NewLLMProvider: projektovemeeting.NewLLM, Users: config.Projektove.Users, TxProvider: txp}
+	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, NewLLMProvider: projektovemeeting.NewLLM, TxProvider: txp}
 
 	if config.Auth.DefaultUser != "" {
 		hash, err := projektovemeeting.HashPassword(config.Auth.DefaultPassword)
@@ -58,10 +58,9 @@ func run() error {
 			return fmt.Errorf("when hashing default user password: %w", err)
 		}
 		obj := projektovemeeting.UserCreate{
-			Email:           config.Auth.DefaultUser,
-			PasswordHash:    new(hash),
-			IsAdmin:         true,
-			ProjektoveToken: "",
+			Email:        config.Auth.DefaultUser,
+			PasswordHash: new(hash),
+			IsAdmin:      true,
 		}
 		if _, err := repo.StoreUser(context.Background(), obj); err != nil {
 			return fmt.Errorf("when bootstrapping default user: %w", err)
@@ -90,7 +89,7 @@ func run() error {
 		return fmt.Errorf("when constructing auth adapter: %w", err)
 	}
 
-	handler := projektovemeeting.NewHandler(auth, "/", controller, config.Projektove.IssueEndpoint, endpointLogout)
+	handler := projektovemeeting.NewHandler(auth, "/", controller, endpointLogout)
 
 	server := http.Server{Addr: fmt.Sprintf(":%d", config.Port), Handler: handler}
 
