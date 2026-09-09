@@ -16,12 +16,12 @@ var (
 	ErrBatchNotFound                      = errors.New("batch not found")
 	ErrBatchCSVInvalid                    = errors.New("batch csv is invalid")
 	ErrIssueSubmitted                     = errors.New("issue already submitted")
-	ErrIssueDeleted                       = errors.New("issue is deleted")
+	ErrIssueIgnored                       = errors.New("issue is ignored")
 	ErrModelNotFound                      = errors.New("model not found")
 	ErrParentDoesNotBelongToUser          = errors.New("parent does not belong to user")
 	ErrIssueIncomplete                    = errors.New("issue is missing required fields")
 	ErrProjektoveTokenNotConfigured       = errors.New("projektove token is not configured")
-	ErrInvalidCredentials                = errors.New("invalid credentials")
+	ErrInvalidCredentials                 = errors.New("invalid credentials")
 )
 
 // BatchCSVError carries the list of human-readable validation problems found

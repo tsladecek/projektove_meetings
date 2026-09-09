@@ -268,18 +268,18 @@ func TestDeleteIssue(t *testing.T) {
 	require.NoError(t, err)
 
 	c := Controller{Repository: repo}
-	err = c.DeleteIssue(t.Context(), user, iss.UUID)
+	err = c.IgnoreIssue(t.Context(), user, iss.UUID)
 	require.NoError(t, err)
 
 	got, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
 	require.NoError(t, err)
-	assert.Equal(t, IssueStatusDeleted, got.Status)
+	assert.Equal(t, IssueStatusIgnored, got.Status)
 	assert.Nil(t, got.ProjektoveID)
 
 	view, err := c.GetPrompt(t.Context(), user, promptUUID)
 	require.NoError(t, err)
 	require.Len(t, view.Issues, 1)
-	assert.Equal(t, IssueStatusDeleted, view.Issues[0].Status)
+	assert.Equal(t, IssueStatusIgnored, view.Issues[0].Status)
 	assert.False(t, view.Issues[0].Editable)
 }
 
@@ -303,7 +303,7 @@ func TestDeleteIssue_Submitted(t *testing.T) {
 	}))
 
 	c := Controller{Repository: repo}
-	err = c.DeleteIssue(t.Context(), user, iss.UUID)
+	err = c.IgnoreIssue(t.Context(), user, iss.UUID)
 	assert.True(t, errors.Is(err, ErrIssueSubmitted))
 
 	got, err := repo.GetIssue(t.Context(), user, IssueParentPrompt, promptID, issueID)
@@ -318,7 +318,7 @@ func TestDeleteIssue_NotFound(t *testing.T) {
 	user := storeUser(t, repo, "user@email.com")
 
 	c := Controller{Repository: repo}
-	err := c.DeleteIssue(t.Context(), user, "does-not-exist")
+	err := c.IgnoreIssue(t.Context(), user, "does-not-exist")
 	assert.True(t, errors.Is(err, ErrIssueNotFound))
 }
 
@@ -336,11 +336,11 @@ func TestDeleteIssue_Idempotent(t *testing.T) {
 		Subject:     "subject",
 		Description: "description",
 		ProjectID:   1,
-		Status:      IssueStatusDeleted,
+		Status:      IssueStatusIgnored,
 	}))
 
 	c := Controller{Repository: repo}
-	err = c.DeleteIssue(t.Context(), user, iss.UUID)
+	err = c.IgnoreIssue(t.Context(), user, iss.UUID)
 	require.NoError(t, err)
 }
 
@@ -358,12 +358,12 @@ func TestUpdateIssue_Deleted(t *testing.T) {
 		Subject:     "subject",
 		Description: "description",
 		ProjectID:   1,
-		Status:      IssueStatusDeleted,
+		Status:      IssueStatusIgnored,
 	}))
 
 	c := Controller{Repository: repo}
 	err = c.UpdateIssue(t.Context(), user, iss.UUID, IssueUpdateView{Subject: "nope"})
-	assert.True(t, errors.Is(err, ErrIssueDeleted))
+	assert.True(t, errors.Is(err, ErrIssueIgnored))
 }
 
 func TestSubmitIssue_Deleted(t *testing.T) {
@@ -380,14 +380,14 @@ func TestSubmitIssue_Deleted(t *testing.T) {
 		Subject:     "subject",
 		Description: "description",
 		ProjectID:   1,
-		Status:      IssueStatusDeleted,
+		Status:      IssueStatusIgnored,
 	}))
 
 	p := &fakeProjektove{}
 	c := Controller{Repository: repo, Projektove: p}
 
 	err = c.SubmitIssue(t.Context(), user, iss.UUID)
-	assert.True(t, errors.Is(err, ErrIssueDeleted))
+	assert.True(t, errors.Is(err, ErrIssueIgnored))
 	assert.Empty(t, p.created)
 }
 

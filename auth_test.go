@@ -23,7 +23,7 @@ import (
 
 func createUser(t *testing.T, repo Repository, email string) User {
 	t.Helper()
-	_, err := repo.StoreUser(t.Context(), UserCreate{Email: email})
+	_, err := repo.StoreUser(t.Context(), UserCreate{Email: email, ProjektoveToken: "token"})
 	require.NoError(t, err)
 	user, err := repo.GetUser(t.Context(), email)
 	require.NoError(t, err)

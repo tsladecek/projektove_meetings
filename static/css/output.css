@@ -12,6 +12,9 @@
     --color-red-700: oklch(50.5% 0.213 27.518);
     --color-red-800: oklch(44.4% 0.177 26.899);
     --color-amber-600: oklch(66.6% 0.179 58.318);
+    --color-yellow-300: oklch(90.5% 0.182 98.111);
+    --color-yellow-700: oklch(55.4% 0.135 66.442);
+    --color-yellow-800: oklch(47.6% 0.114 61.907);
     --color-green-600: oklch(62.7% 0.194 149.214);
     --color-green-700: oklch(52.7% 0.154 150.069);
     --color-gray-50: oklch(98.5% 0.002 247.839);
@@ -337,6 +340,9 @@
   .flex-1 {
     flex: 1;
   }
+  .flex-2 {
+    flex: 2;
+  }
   .shrink-0 {
     flex-shrink: 0;
   }
@@ -484,6 +490,9 @@
   }
   .bg-white {
     background-color: var(--color-white);
+  }
+  .bg-yellow-700 {
+    background-color: var(--color-yellow-700);
   }
   .p-2 {
     padding: calc(var(--spacing) * 2);
@@ -660,6 +669,13 @@
       }
     }
   }
+  .hover\:bg-yellow-800 {
+    &:hover {
+      @media (hover: hover) {
+        background-color: var(--color-yellow-800);
+      }
+    }
+  }
   .focus\:border-transparent {
     &:focus {
       border-color: transparent;
@@ -697,6 +713,11 @@
       background-color: var(--color-red-300);
     }
   }
+  .disabled\:bg-yellow-300 {
+    &:disabled {
+      background-color: var(--color-yellow-300);
+    }
+  }
   .disabled\:opacity-60 {
     &:disabled {
       opacity: 60%;
@@ -716,6 +737,15 @@
       &:hover {
         @media (hover: hover) {
           background-color: var(--color-red-300);
+        }
+      }
+    }
+  }
+  .disabled\:hover\:bg-yellow-300 {
+    &:disabled {
+      &:hover {
+        @media (hover: hover) {
+          background-color: var(--color-yellow-300);
         }
       }
     }

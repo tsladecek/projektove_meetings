@@ -598,7 +598,7 @@ func (r *RepositorySqlite) loadProviders(ctx context.Context, u *User) error {
 }
 
 func (r *RepositorySqlite) StoreUser(ctx context.Context, obj UserCreate) (int, error) {
-	result, execErr := r.DB.ExecContext(ctx, "INSERT INTO users (email, password_hash, is_admin, projektove_token) VALUES (?, ?, false, ?)", obj.Email, obj.PasswordHash, obj.ProjektoveToken)
+	result, execErr := r.DB.ExecContext(ctx, "INSERT INTO users (email, password_hash, is_admin, projektove_token) VALUES (?, ?, ?, ?)", obj.Email, obj.PasswordHash, obj.IsAdmin, obj.ProjektoveToken)
 	if execErr != nil {
 		return 0, fmt.Errorf("failed to insert user: %w", execErr)
 	}
@@ -625,28 +625,6 @@ func (r *RepositorySqlite) StoreUser(ctx context.Context, obj UserCreate) (int, 
 	}
 
 	return int(id), nil
-}
-
-func (r *RepositorySqlite) UpsertDefaultUser(ctx context.Context, email, passwordHash string) error {
-	var existingID int
-	err := r.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE email = ?", email).Scan(&existingID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			_, execErr := r.DB.ExecContext(ctx, "INSERT INTO users (email, password_hash, is_admin, projektove_token) VALUES (?, ?, true, '')", email, passwordHash)
-			if execErr != nil {
-				return fmt.Errorf("failed to create default user: %w", execErr)
-			}
-			return nil
-		}
-		return fmt.Errorf("when checking for default user: %w", err)
-	}
-
-	_, err = r.DB.ExecContext(ctx, "UPDATE users SET password_hash = ? WHERE id = ? AND (password_hash IS NULL OR password_hash = '')", passwordHash, existingID)
-	if err != nil {
-		return fmt.Errorf("failed to update default user password: %w", err)
-	}
-
-	return nil
 }
 
 func (r *RepositorySqlite) UpdateUser(ctx context.Context, u User, obj UserUpdate) error {

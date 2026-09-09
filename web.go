@@ -56,7 +56,7 @@ type endpoints struct {
 
 	updateIssue Endpoint
 	submitIssue Endpoint
-	deleteIssue Endpoint
+	ignoreIssue Endpoint
 }
 
 type components struct {
@@ -108,7 +108,7 @@ func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssu
 
 		updateIssue: endAPI(http.MethodPut, "/issues/{id}"),
 		submitIssue: endAPI(http.MethodPost, "/issues/{id}/submit"),
-		deleteIssue: endAPI(http.MethodDelete, "/issues/{id}"),
+		ignoreIssue: endAPI(http.MethodPut, "/issues/{id}/ignore"),
 	}
 
 	c := components{endpoints: e, projektoveIssueEndpoint: projektoveIssueEndpoint, endpointLogout: logoutEndpoint}
@@ -143,7 +143,7 @@ func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssu
 		{endpoint: e.createBatch, handler: a.createBatch()},
 		{endpoint: e.updateIssue, handler: a.updateIssue()},
 		{endpoint: e.submitIssue, handler: a.submitIssue()},
-		{endpoint: e.deleteIssue, handler: a.deleteIssue()},
+		{endpoint: e.ignoreIssue, handler: a.ignoreIssue()},
 	} {
 		m.Handle(eh.endpoint.Pattern(), auth.Middleware(eh.handler))
 	}
@@ -720,7 +720,7 @@ func (a api) submitIssue() http.HandlerFunc {
 	}
 }
 
-func (a api) deleteIssue() http.HandlerFunc {
+func (a api) ignoreIssue() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := UserFromContext(r.Context())
 		if !ok {
@@ -731,19 +731,19 @@ func (a api) deleteIssue() http.HandlerFunc {
 		issueUUID := r.PathValue("id")
 		projects, _ := a.controller.ListProjects(r.Context(), user)
 
-		if err := a.controller.DeleteIssue(r.Context(), user, issueUUID); err != nil {
+		if err := a.controller.IgnoreIssue(r.Context(), user, issueUUID); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
 				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
 				return
-			case errors.Is(err, ErrIssueDeleted):
+			case errors.Is(err, ErrIssueIgnored):
 				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			default:
-				w.Header().Set("X-Error", "Failed to delete issue")
+				w.Header().Set("X-Error", "Failed to ignore issue")
 				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
 				return
 			}
@@ -1445,7 +1445,7 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 	cardID := "issue-" + iss.ID
 
 	if !iss.Editable {
-		if iss.Status == IssueStatusDeleted {
+		if iss.Status == IssueStatusIgnored {
 			return h.Div(
 				h.ID(cardID),
 				h.Class("border rounded p-4 flex items-start justify-between"),
@@ -1455,8 +1455,8 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 				),
 				h.Div(
 					h.Class("flex items-center gap-2 text-gray-500 text-sm"),
-					solid.Trash(h.Class("h-5 w-5")),
-					g.Text("Deleted"),
+					solid.XMark(h.Class("h-5 w-5")),
+					g.Text("Ignored"),
 				),
 			)
 		}
@@ -1514,7 +1514,7 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 
 	updatePath := strings.Replace(c.endpoints.updateIssue.Path(), "{id}", iss.ID, 1)
 	submitPath := strings.Replace(c.endpoints.submitIssue.Path(), "{id}", iss.ID, 1)
-	deletePath := strings.Replace(c.endpoints.deleteIssue.Path(), "{id}", iss.ID, 1)
+	ignorePath := strings.Replace(c.endpoints.ignoreIssue.Path(), "{id}", iss.ID, 1)
 	indicator := "#submit-indicator-" + iss.ID
 
 	return h.Form(
@@ -1574,12 +1574,12 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 				g.Text("Submitting..."),
 			),
 			h.Div(h.Class("flex-1")),
-			c.DeleteButton(
+			c.IgnoreButton(
 				h.Type("button"),
-				htmx.Delete(deletePath),
+				htmx.Put(ignorePath),
 				htmx.Target("#"+cardID),
 				htmx.Swap("outerHTML"),
-				htmx.Confirm("Delete this issue?"),
+				htmx.Confirm("Are you sure? This will mark the issue as ignored and will be exclude it from submission"),
 			),
 		),
 	)
@@ -1638,6 +1638,13 @@ func (c components) DeleteButton(opts ...g.Node) g.Node {
 	return c.button(
 		baseButtonClass+"bg-red-700 hover:bg-red-800 text-white px-2 py-1 disabled:bg-red-300 disabled:hover:bg-red-300",
 		append(opts, solid.Trash(h.Class("h-4 w-4")), g.Text("Remove"))...,
+	)
+}
+
+func (c components) IgnoreButton(opts ...g.Node) g.Node {
+	return c.button(
+		baseButtonClass+"bg-yellow-700 hover:bg-yellow-800 text-white px-2 py-1 disabled:bg-yellow-300 disabled:hover:bg-yellow-300",
+		append(opts, solid.XMark(h.Class("h-4 w-4")), g.Text("Ignore"))...,
 	)
 }
 

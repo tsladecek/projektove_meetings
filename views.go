@@ -43,6 +43,7 @@ type IssueUpdate struct {
 type UserCreate struct {
 	Email           string
 	PasswordHash    *string
+	IsAdmin         bool
 	ProjektoveToken string
 	Models          []LLMModel
 }

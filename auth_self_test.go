@@ -36,30 +36,6 @@ func createUserWithPassword(t *testing.T, repo Repository, email, password strin
 	return user
 }
 
-func TestUpsertDefaultUser_Creates(t *testing.T) {
-	repo := newRepository(t)
-	err := repo.UpsertDefaultUser(t.Context(), "admin@example.com", "hash")
-	require.NoError(t, err)
-
-	user, err := repo.GetUser(t.Context(), "admin@example.com")
-	require.NoError(t, err)
-	assert.Equal(t, "hash", *user.PasswordHash)
-	assert.True(t, user.IsAdmin)
-}
-
-func TestUpsertDefaultUser_SetsExistingWithoutPassword(t *testing.T) {
-	repo := newRepository(t)
-	user := createUser(t, repo, "admin@example.com")
-	assert.Nil(t, user.PasswordHash)
-
-	err := repo.UpsertDefaultUser(t.Context(), "admin@example.com", "new-hash")
-	require.NoError(t, err)
-
-	updated, err := repo.GetUser(t.Context(), "admin@example.com")
-	require.NoError(t, err)
-	assert.Equal(t, "new-hash", *updated.PasswordHash)
-}
-
 func TestSelfLogin_POSTSuccess(t *testing.T) {
 	repo := newRepository(t)
 	createUserWithPassword(t, repo, "user@example.com", "secret")

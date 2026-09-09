@@ -57,7 +57,13 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("when hashing default user password: %w", err)
 		}
-		if err := repo.UpsertDefaultUser(context.Background(), config.Auth.DefaultUser, hash); err != nil {
+		obj := projektovemeeting.UserCreate{
+			Email:           config.Auth.DefaultUser,
+			PasswordHash:    new(hash),
+			IsAdmin:         true,
+			ProjektoveToken: "",
+		}
+		if _, err := repo.StoreUser(context.Background(), obj); err != nil {
 			return fmt.Errorf("when bootstrapping default user: %w", err)
 		}
 	}

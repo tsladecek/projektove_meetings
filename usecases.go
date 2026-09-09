@@ -480,8 +480,8 @@ func (c Controller) UpdateIssue(ctx context.Context, user User, issueUUID string
 	if isSubmitted(iss.Status) {
 		return ErrIssueSubmitted
 	}
-	if iss.Status == IssueStatusDeleted {
-		return ErrIssueDeleted
+	if iss.Status == IssueStatusIgnored {
+		return ErrIssueIgnored
 	}
 
 	obj := IssueUpdate{
@@ -511,8 +511,8 @@ func (c Controller) SubmitIssue(ctx context.Context, user User, issueUUID string
 	if isSubmitted(iss.Status) {
 		return ErrIssueSubmitted
 	}
-	if iss.Status == IssueStatusDeleted {
-		return ErrIssueDeleted
+	if iss.Status == IssueStatusIgnored {
+		return ErrIssueIgnored
 	}
 
 	var missing []string
@@ -586,7 +586,7 @@ func isEditable(status IssueStatus) bool {
 	return status == IssueStatusCreated || status == IssueStatusSubmitFailed
 }
 
-func (c Controller) DeleteIssue(ctx context.Context, user User, issueUUID string) error {
+func (c Controller) IgnoreIssue(ctx context.Context, user User, issueUUID string) error {
 	iss, err := c.Repository.GetIssueByUUID(ctx, user, issueUUID)
 	if err != nil {
 		return err
@@ -595,7 +595,7 @@ func (c Controller) DeleteIssue(ctx context.Context, user User, issueUUID string
 	if isSubmitted(iss.Status) {
 		return ErrIssueSubmitted
 	}
-	if iss.Status == IssueStatusDeleted {
+	if iss.Status == IssueStatusIgnored {
 		return nil
 	}
 
@@ -606,10 +606,10 @@ func (c Controller) DeleteIssue(ctx context.Context, user User, issueUUID string
 		StartDate:    iss.StartDate,
 		DueDate:      iss.DueDate,
 		AssignedToID: iss.AssignedToID,
-		Status:       IssueStatusDeleted,
+		Status:       IssueStatusIgnored,
 		ProjektoveID: nil,
 	}); err != nil {
-		return fmt.Errorf("when deleting issue: %w", err)
+		return fmt.Errorf("when ignoring issue: %w", err)
 	}
 
 	return nil
