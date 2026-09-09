@@ -734,6 +734,13 @@ func (a api) updateUser() http.HandlerFunc {
 		}
 
 		withSuccessToast(w)
+
+		profile, err := a.controller.GetUserProfile(r.Context(), user)
+		if err != nil {
+			WriteError(w, "failed to reload user", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.userAddForms(profile).Render(w)
 	}
 }
 
@@ -1836,9 +1843,75 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 		orgRows = append(orgRows, c.OrgRow(o))
 	}
 
+	return h.Div(
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("User")),
+
+		h.Form(
+			h.ID("user-form"),
+			h.Method("post"),
+			htmx.Put(c.endpoints.updateUser.Path()),
+			htmx.Target("#user-add-forms"),
+			htmx.Swap("outerHTML"),
+			h.Class("space-y-6"),
+
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove organizations")),
+				h.P(h.Class("text-sm text-gray-500"), g.Text("Set the API token for each organization you belong to.")),
+				h.Div(h.ID("organizations-list"), h.Class("space-y-2"), g.Group(orgRows)),
+			),
+
+			h.Div(
+				h.ID("models-list"),
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("LLM models")),
+				g.Group(modelRows),
+			),
+
+			c.SaveButton(h.Type("submit")),
+		),
+
+		c.userAddForms(profile),
+
+		h.Hr(h.Class("my-8")),
+
+		h.Div(
+			h.Class("space-y-2"),
+			h.H2(h.Class("text-xl font-semibold"), g.Text("Contexts")),
+			h.Div(h.ID("contexts-list"), h.Class("space-y-2"), g.Group(c.contextRows(profile.Contexts))),
+			h.Form(
+				h.ID("add-context-form"),
+				h.Method("post"),
+				htmx.Post(c.endpoints.addContext.Path()),
+				htmx.Target("#contexts-list"),
+				htmx.Swap("beforeend"),
+				htmx.On("htmx:after:request", "this.reset()"),
+				h.Class("space-y-2"),
+				h.Input(h.Type("text"), h.Name("name"), h.Placeholder("name"), h.Class("w-full px-2 py-1 border rounded"), h.Required()),
+				h.Textarea(
+					h.Name("context"),
+					h.Placeholder("context"),
+					h.Rows("5"),
+					h.Class("w-full px-2 py-1 border rounded"),
+					h.Required(),
+				),
+				c.AddButton("Add context", h.Type("submit")),
+			),
+		),
+	)
+}
+
+func (c components) userAddForms(profile UserProfileView) g.Node {
 	modelOpts := []g.Node{}
+	linkedModels := map[string]bool{}
+	for _, m := range profile.Models {
+		linkedModels[m.Provider+"/"+m.Model] = true
+	}
 	for _, m := range profile.AvailableModels {
 		label := m.Provider + "/" + m.Model
+		if linkedModels[label] {
+			continue
+		}
 		modelOpts = append(modelOpts, h.Option(h.Value(label), g.Text(label)))
 	}
 	if len(modelOpts) == 0 {
@@ -1865,32 +1938,8 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 	}
 
 	return h.Div(
-		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("User")),
-
-		h.Form(
-			h.ID("user-form"),
-			h.Method("post"),
-			htmx.Put(c.endpoints.updateUser.Path()),
-			htmx.Swap("none"),
-			h.Class("space-y-6"),
-
-			h.Div(
-				h.Class("space-y-2"),
-				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove organizations")),
-				h.P(h.Class("text-sm text-gray-500"), g.Text("Set the API token for each organization you belong to.")),
-				h.Div(h.ID("organizations-list"), h.Class("space-y-2"), g.Group(orgRows)),
-			),
-
-			h.Div(
-				h.ID("models-list"),
-				h.Class("space-y-2"),
-				h.Label(h.Class("block text-sm font-medium"), g.Text("LLM models")),
-				g.Group(modelRows),
-			),
-
-			c.SaveButton(h.Type("submit")),
-		),
-
+		h.ID("user-add-forms"),
+		h.Class("mt-5 space-y-4"),
 		h.Form(
 			h.ID("add-organization-form"),
 			h.Method("post"),
@@ -1898,12 +1947,14 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 			htmx.Target("#organizations-list"),
 			htmx.Swap("beforeend"),
 			htmx.On("htmx:after:request", "this.reset()"),
-			h.Class("grid grid-rows-3 lg:grid-cols-[1fr_1fr_auto] gap-2 mt-4"),
-			h.Select(h.Name("organization"), h.Class("px-2 py-1 border rounded"), h.Required(), g.Group(orgOpts)),
-			h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
-			c.AddButton("Add organization", h.Type("submit")),
+			h.P(h.Class("text-xs"), g.Text("Add Organization")),
+			h.Div(
+				h.Class("grid grid-rows-3 lg:grid-rows-1 lg:grid-cols-[1fr_1fr_auto] gap-2 items-end"),
+				h.Select(h.Name("organization"), h.Class("px-2 py-1 border rounded h-full"), h.Required(), g.Group(orgOpts)),
+				h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
+				h.Div(h.Class("flex justify-end"), c.AddButton("Add", h.Type("submit"))),
+			),
 		),
-
 		h.Form(
 			h.ID("add-model-form"),
 			h.Method("post"),
@@ -1911,35 +1962,12 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 			htmx.Target("#models-list"),
 			htmx.Swap("beforeend"),
 			htmx.On("htmx:after:request", "this.reset()"),
-			h.Class("grid grid-rows-3 lg:grid-cols-[1fr_1fr_auto] gap-2 mt-4"),
-			h.Select(h.Name("model"), h.Class("px-2 py-1 border rounded"), h.Required(), g.Group(modelOpts)),
-			h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
-			c.AddButton("Add model", h.Type("submit")),
-		),
-
-		h.Hr(h.Class("my-8")),
-
-		h.Div(
-			h.Class("space-y-2"),
-			h.H2(h.Class("text-xl font-semibold"), g.Text("Contexts")),
-			h.Div(h.ID("contexts-list"), h.Class("space-y-2"), g.Group(c.contextRows(profile.Contexts))),
-			h.Form(
-				h.ID("add-context-form"),
-				h.Method("post"),
-				htmx.Post(c.endpoints.addContext.Path()),
-				htmx.Target("#contexts-list"),
-				htmx.Swap("beforeend"),
-				htmx.On("htmx:after:request", "this.reset()"),
-				h.Class("space-y-2"),
-				h.Input(h.Type("text"), h.Name("name"), h.Placeholder("name"), h.Class("w-full px-2 py-1 border rounded"), h.Required()),
-				h.Textarea(
-					h.Name("context"),
-					h.Placeholder("context"),
-					h.Rows("5"),
-					h.Class("w-full px-2 py-1 border rounded"),
-					h.Required(),
-				),
-				c.AddButton("Add context", h.Type("submit")),
+			h.P(h.Class("text-xs"), g.Text("Add Model")),
+			h.Div(
+				h.Class("grid grid-rows-3 lg:grid-rows-1 lg:grid-cols-[1fr_1fr_auto] gap-2 items-end"),
+				h.Select(h.Name("model"), h.Class("px-2 py-1 border rounded h-full"), h.Required(), g.Group(modelOpts)),
+				h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
+				h.Div(h.Class("flex justify-end"), c.AddButton("Add", h.Type("submit"))),
 			),
 		),
 	)
@@ -2430,8 +2458,9 @@ func (c components) ModelRow(m UserModelView) g.Node {
 	return h.Div(
 		h.Class("model-row flex gap-2 items-center border rounded px-3 py-2 overflow-auto"),
 		h.Input(h.Type("hidden"), h.Name("model_uuid"), h.Value(m.ID)),
-		h.Input(h.Type("text"), h.Name("model_provider"), h.Value(m.Provider), h.Class("flex-1 px-2 py-1 border rounded")),
-		h.Input(h.Type("text"), h.Name("model_name"), h.Value(m.Model), h.Class("flex-1 px-2 py-1 border rounded")),
+		h.Input(h.Type("hidden"), h.Name("model_provider"), h.Value(m.Provider)),
+		h.Input(h.Type("hidden"), h.Name("model_name"), h.Value(m.Model)),
+		h.Span(h.Class("flex-1 font-medium"), g.Text(fmt.Sprintf("%s / %s", m.Provider, m.Model))),
 		h.Input(h.Type("text"), h.Name("model_token"), h.Value(m.Token), h.Class("flex-1 px-2 py-1 border rounded")),
 		c.DeleteButton(h.Type("button"), g.Attr("onclick", "this.closest('.model-row').remove()")),
 	)

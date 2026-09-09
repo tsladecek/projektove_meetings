@@ -268,11 +268,15 @@ func TestUserPage_RendersModelSelect(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = repo.GetOrCreateModel(t.Context(), providerID, "gpt-4o")
 	require.NoError(t, err)
+	_, _, err = repo.GetOrCreateModel(t.Context(), providerID, "gpt-4o-mini")
+	require.NoError(t, err)
+	storeUserModel(t, repo, user, "openai", "gpt-4o", "g-token")
 
 	rec := adminRequest(handler, auth, user, http.MethodGet, "/user", "")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), `value="openai/gpt-4o"`)
 	assert.Contains(t, rec.Body.String(), `name="model"`)
+	assert.Contains(t, rec.Body.String(), `value="openai/gpt-4o-mini"`)
+	assert.NotContains(t, rec.Body.String(), `value="openai/gpt-4o"`)
 }
 
 func TestAddOrganization_Valid(t *testing.T) {
