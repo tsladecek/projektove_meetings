@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"time"
 
 	projektovemeeting "github.com/tsladecek/projektove_meeting"
@@ -94,15 +95,34 @@ func run() error {
 
 	handler := projektovemeeting.NewHandler(auth, "/", controller, endpointLogout)
 
-	server := http.Server{Addr: fmt.Sprintf(":%d", config.Port), Handler: handler}
+	port := 80
+
+	if config.TLS.CertPath != "" {
+		port = 443
+	}
+
+	if baseURL.Port() != "" {
+		port, err = strconv.Atoi(baseURL.Port())
+		if err != nil {
+			return fmt.Errorf("when parsing port from baseURL %q: %w", baseURL.String(), err)
+		}
+	}
+
+	server := http.Server{Addr: fmt.Sprintf(":%d", port), Handler: handler}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	go func() {
-		slog.Info("Starting server...", slog.Int("port", config.Port))
-		if err := server.ListenAndServe(); err != nil {
-			slog.Error(err.Error())
+		slog.Info("Starting server...", slog.Int("port", port))
+		if config.TLS.CertPath != "" {
+			if err := server.ListenAndServeTLS(config.TLS.CertPath, config.TLS.KeyPath); err != nil {
+				slog.Error(err.Error())
+			}
+		} else {
+			if err := server.ListenAndServe(); err != nil {
+				slog.Error(err.Error())
+			}
 		}
 	}()
 

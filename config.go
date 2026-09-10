@@ -10,13 +10,17 @@ import (
 )
 
 type Config struct {
-	DB         string           `toml:"db" env:"DB" description:"name of the sqlite database for storing cache and prompt history" env-default:"db.sqlite"`
-	BaseURL    string           `toml:"base_url" env:"BASEURL" env-default:"/"`
-	Port       int              `toml:"port" env:"PORT" env-default:"8000"`
-	Projektove ConfigProjektove `toml:"projektove" env-prefix:"PROJEKTOVE_" env-required:"true"`
-	Auth       ConfigAuth       `toml:"auth" env-prefix:"AUTH_" env-required:"true"`
-	OIDC       ConfigOIDC       `toml:"oidc" env-prefix:"OIDC_"`
-	Logging    ConfigLogging    `toml:"logging" env-prefix:"LOGGING_"`
+	DB      string        `toml:"db" env:"DB" description:"name of the sqlite database for storing cache and prompt history" env-default:"db.sqlite"`
+	BaseURL string        `toml:"base_url" env:"BASEURL" env-default:"http://localhost:8000"`
+	TLS     ConfigTLS     `toml:"tls" env-prefix:"TLS_"`
+	Auth    ConfigAuth    `toml:"auth" env-prefix:"AUTH_" env-required:"true"`
+	OIDC    ConfigOIDC    `toml:"oidc" env-prefix:"OIDC_"`
+	Logging ConfigLogging `toml:"logging" env-prefix:"LOGGING_"`
+}
+
+type ConfigTLS struct {
+	CertPath string `toml:"cert_path" env:"CERTPATH"`
+	KeyPath  string `toml:"key_path" env:"KEYPATH"`
 }
 
 type ConfigLogging struct {
@@ -24,7 +28,7 @@ type ConfigLogging struct {
 }
 
 type ConfigAuth struct {
-	SecretKey       string `toml:"secret_key" env:"SECRETKEY" env-required:"true"`
+	SecretKey       string `toml:"secret_key" env:"SECRETKEY"`
 	DefaultUser     string `toml:"default_user" env:"DEFAULTUSER" env-default:"admin"`
 	DefaultPassword string `toml:"default_password" env:"DEFAULTPASSWORD" env-default:"password"`
 
@@ -40,11 +44,6 @@ type ConfigOIDC struct {
 	IDTokenCookieName      string `toml:"id_token_cookie_name" env:"IDTOKENCOOKIENAME" env-default:"id_token"`
 	RefreshTokenCookieName string `toml:"refresh_token_cookie_name" env:"REFRESHTOKENCOOKIENAME" env-default:"refresh_token"`
 	CallbackEndpoint       string `toml:"callback_endpoint" env:"CALLBACKENDPOINT" env-default:"/oauth2/callback"`
-}
-
-type ConfigProjektove struct {
-	URL           string `toml:"url" env:"URL" env-required:"true" env-description:"api url"`
-	IssueEndpoint string `toml:"issue_endpoint" env:"ISSUEENDPOINT" env-required:"true" env-description:"UI url to an issue, e.g. https://app.projektove.cz/<org>/tasks/%d"`
 }
 
 func NewConfig(configPath string) (Config, error) {
@@ -71,6 +70,11 @@ func NewConfig(configPath string) (Config, error) {
 		level = slog.LevelError
 	default:
 		return Config{}, fmt.Errorf("unrecognized logger level %q", cfg.Logging.Level)
+	}
+
+	if cfg.Auth.SecretKey == "" {
+		slog.Warn("In production set the Auth.SecretKey to a random string")
+		cfg.Auth.SecretKey = "secret"
 	}
 
 	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
