@@ -411,6 +411,48 @@ func TestMiddlewareAuth_RefreshFails(t *testing.T) {
 	}
 }
 
+func TestMiddleware_BearerOIDCToken(t *testing.T) {
+	repo := newRepository(t)
+	createUser(t, repo, testEmail)
+	auth, issuer := authCompositeWithOIDC(t, repo)
+
+	token := signToken(t, issuer, testClientID, testEmail, testKid)
+
+	var gotUser User
+	var gotOK bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotOK = UserFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	auth.Middleware(next).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, gotOK)
+	assert.Equal(t, testEmail, gotUser.Email)
+}
+
+func TestMiddleware_BearerInvalidOIDCToken_Returns401(t *testing.T) {
+	repo := newRepository(t)
+	auth, _ := authCompositeWithOIDC(t, repo)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
+	req.Header.Set("Authorization", "Bearer garbage-token")
+	rec := httptest.NewRecorder()
+
+	auth.Middleware(next).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Unauthorized")
+}
+
 func TestCallback_SetsRefreshCookie(t *testing.T) {
 	repo := newRepository(t)
 	verifier, issuer := authVerifier(t, testClientID)

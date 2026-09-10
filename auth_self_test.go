@@ -228,6 +228,50 @@ func TestLoginPage_RendersSSOButtonWhenOIDCConfigured(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), `name="email"`)
 }
 
+func TestMiddleware_BearerSessionToken(t *testing.T) {
+	repo := newRepository(t)
+	user := createUserWithPassword(t, repo, "user@example.com", "secret")
+	auth := newTestAuth(t, repo)
+	composite := auth.(*AuthComposite)
+
+	token, err := composite.generateSessionToken(user.ID)
+	require.NoError(t, err)
+
+	var gotUser User
+	var gotOK bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser, gotOK = UserFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	auth.Middleware(next).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, gotOK)
+	assert.Equal(t, "user@example.com", gotUser.Email)
+}
+
+func TestMiddleware_BearerInvalidToken_Returns401(t *testing.T) {
+	repo := newRepository(t)
+	auth := newTestAuth(t, repo)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/prompts", nil)
+	req.Header.Set("Authorization", "Bearer garbage-token")
+	rec := httptest.NewRecorder()
+
+	auth.Middleware(next).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Unauthorized")
+}
+
 func TestLogout_ClearsSessionCookie(t *testing.T) {
 	repo := newRepository(t)
 	user := createUserWithPassword(t, repo, "user@example.com", "secret")

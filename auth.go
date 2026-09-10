@@ -258,11 +258,18 @@ func (a AuthOIDC) clearAllCookies(w http.ResponseWriter) {
 func (a *AuthComposite) Authenticate(ctx context.Context, tokens *Tokens) (User, error) {
 	if tokens.Session != "" {
 		user, err := a.validateSessionToken(ctx, tokens.Session)
-		if err != nil {
-			return User{}, fmt.Errorf("when validating session token: %w", err)
+		if err == nil {
+			return user, nil
 		}
 
-		return user, nil
+		if a.oidc != nil && tokens.ID != "" {
+			user, oidcErr := a.oidc.authenticate(ctx, tokens)
+			if oidcErr == nil {
+				return user, nil
+			}
+		}
+
+		return User{}, fmt.Errorf("when validating session token: %w", err)
 	}
 
 	if a.oidc == nil {
@@ -383,6 +390,17 @@ func (a *AuthComposite) authenticate(w http.ResponseWriter, r *http.Request) (Us
 		}
 	}
 
+	// Check Authorization header (Bearer token) as fallback when no cookies provide tokens
+	if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+		bearerToken := strings.TrimPrefix(authHeader, "Bearer ")
+		if tokens.Session == "" {
+			tokens.Session = bearerToken
+		}
+		if a.oidc != nil && tokens.ID == "" {
+			tokens.ID = bearerToken
+		}
+	}
+
 	user, err := a.Authenticate(r.Context(), &tokens)
 	if err != nil {
 		return User{}, tokens, fmt.Errorf("not authenticated")
@@ -396,6 +414,10 @@ func (a *AuthComposite) Middleware(next http.Handler) http.Handler {
 		u, tokens, err := a.authenticate(w, r)
 		if err != nil {
 			clearSessionCookie(w)
+			if r.Header.Get("Authorization") != "" {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
 			if a.oidc != nil && tokens.ID != "" {
 				a.oidc.logout(w, r)
 				return
