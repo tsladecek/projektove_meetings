@@ -80,20 +80,15 @@ type components struct {
 	endpointLogout Endpoint
 }
 
-func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint Endpoint) http.Handler {
+func NewHandler(auth Auth, baseURL *url.URL, controller Controller, logoutEndpoint Endpoint) http.Handler {
 	m := http.NewServeMux()
 
-	burl, err := url.Parse(baseURL)
-	if err != nil {
-		panic(err)
-	}
-
 	end := func(method, endpoint string) Endpoint {
-		return NewEndpoint(method, burl.Path, endpoint)
+		return NewEndpoint(method, baseURL.Path, endpoint)
 	}
 
 	endAPI := func(method, endpoint string) Endpoint {
-		return NewEndpoint(method, path.Join(burl.Path, "/api"), endpoint)
+		return NewEndpoint(method, path.Join(baseURL.Path, "/api"), endpoint)
 	}
 
 	e := endpoints{
@@ -133,7 +128,7 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 
 		// admin api
 		adminCreateOrganization: endAPI(http.MethodPost, "/admin/organizations"),
-		adminUpdateOrganization: endAPI(http.MethodPost, "/admin/organizations/{id}"),
+		adminUpdateOrganization: endAPI(http.MethodPut, "/admin/organizations/{id}"),
 		adminAddOrgUser:         endAPI(http.MethodPost, "/admin/organizations/{id}/users"),
 		adminRemoveOrgUser:      endAPI(http.MethodDelete, "/admin/organizations/{id}/users/{uid}"),
 		adminCreateProvider:     endAPI(http.MethodPost, "/admin/providers"),
@@ -141,7 +136,7 @@ func NewHandler(auth Auth, baseURL string, controller Controller, logoutEndpoint
 	}
 
 	c := components{endpoints: e, endpointLogout: logoutEndpoint}
-	a := api{controller: controller, basePath: burl.Path, components: c}
+	a := api{controller: controller, basePath: baseURL.Path, components: c}
 
 	type endpointHandler struct {
 		endpoint Endpoint
@@ -515,6 +510,10 @@ func (a api) adminCreateOrganization() http.HandlerFunc {
 
 		orgUUID, err := a.controller.CreateOrganization(r.Context(), r.Form.Get("name"), r.Form.Get("api_url"), r.Form.Get("browser_url"))
 		if err != nil {
+			if errors.Is(err, ErrOrganizationExists) {
+				WriteError(w, fmt.Sprintf("Organization %s already exists", r.Form.Get("name")), http.StatusBadRequest, nil)
+				return
+			}
 			if errors.Is(err, ErrInvalidArgument) {
 				a.page(w, r, a.components.AdminNewOrganizationPage([]string{"All fields are required"}))
 				return
@@ -524,7 +523,7 @@ func (a api) adminCreateOrganization() http.HandlerFunc {
 		}
 
 		redirectPath := strings.Replace(a.components.endpoints.adminOrganization.Path(), "{id}", orgUUID, 1)
-		http.Redirect(w, r, redirectPath, http.StatusSeeOther)
+		w.Header().Add("HX-Location", redirectPath)
 	}
 }
 
@@ -537,8 +536,12 @@ func (a api) adminUpdateOrganization() http.HandlerFunc {
 			return
 		}
 
-		err := a.controller.UpdateOrganization(r.Context(), orgUUID, r.Form.Get("name"), r.Form.Get("api_url"), r.Form.Get("browser_url"))
+		err := a.controller.UpdateOrganization(r.Context(), orgUUID, r.Form.Get("api_url"), r.Form.Get("browser_url"))
 		if err != nil {
+			if errors.Is(err, ErrOrganizationExists) {
+				WriteError(w, fmt.Sprintf("Organization %s already exists", r.Form.Get("name")), http.StatusBadRequest, nil)
+				return
+			}
 			if errors.Is(err, ErrInvalidArgument) {
 				w.Header().Set("X-Error", "All fields are required")
 				view, _ := a.controller.GetAdminOrganization(r.Context(), orgUUID)
@@ -1590,9 +1593,9 @@ func (c components) AdminNewOrganizationPage(validationErrors []string) g.Node {
 	nodes = append(nodes,
 		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("New organization")),
 		h.Form(
-			h.Method("post"),
-			h.Action(c.endpoints.adminCreateOrganization.Path()),
+			htmx.Post(c.endpoints.adminCreateOrganization.Path()),
 			h.Class("space-y-6 max-w-2xl"),
+			g.Attr("hx-status:4xx", "swap:none"),
 			h.Div(
 				h.Class("space-y-2"),
 				h.Label(h.Class("block text-sm font-medium"), g.Text("Name")),
@@ -1651,16 +1654,11 @@ func (c components) AdminOrgDetailsForm(view AdminOrganizationView, validationEr
 
 	nodes = append(nodes,
 		h.Form(
-			h.Method("post"),
-			htmx.Post(path),
+			htmx.Put(path),
 			htmx.Target("this"),
 			htmx.Swap("outerHTML"),
 			h.Class("space-y-6 max-w-2xl mb-8"),
-			h.Div(
-				h.Class("space-y-2"),
-				h.Label(h.Class("block text-sm font-medium"), g.Text("Name")),
-				h.Input(h.Name("name"), h.Value(view.Name), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
-			),
+			g.Attr("hx-status:4xx", "swap:none"),
 			h.Div(
 				h.Class("space-y-2"),
 				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove API URL")),

@@ -27,6 +27,7 @@ var (
 	ErrOrganizationNotConfigured          = errors.New("projektove organization is not configured")
 	ErrInvalidCredentials                 = errors.New("invalid credentials")
 	ErrInvalidArgument                    = errors.New("invalid argument")
+	ErrOrganizationExists                 = errors.New("organization with provided name already exists")
 )
 
 // BatchCSVError carries the list of human-readable validation problems found

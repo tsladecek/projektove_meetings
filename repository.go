@@ -984,8 +984,8 @@ func (r *RepositorySqlite) GetProjektoveOrganizationByName(ctx context.Context, 
 	return o, nil
 }
 
-func (r *RepositorySqlite) UpdateProjektoveOrganization(ctx context.Context, uuid string, name, apiURL, browserURL string) error {
-	result, err := r.DB.ExecContext(ctx, "UPDATE projektove_organizations SET name = ?, api_url = ?, browser_url = ? WHERE uuid = ?", name, apiURL, browserURL, uuid)
+func (r *RepositorySqlite) UpdateProjektoveOrganization(ctx context.Context, uuid string, apiURL, browserURL string) error {
+	result, err := r.DB.ExecContext(ctx, "UPDATE projektove_organizations SET api_url = ?, browser_url = ? WHERE uuid = ?", apiURL, browserURL, uuid)
 	if err != nil {
 		return fmt.Errorf("failed to update projektove organization: %w", err)
 	}

@@ -72,7 +72,7 @@ type Repository interface {
 	GetProjektoveOrganizationByUUID(ctx context.Context, uuid string) (ProjektoveOrganization, error)
 	GetProjektoveOrganizationByName(ctx context.Context, name string) (ProjektoveOrganization, error)
 	StoreProjektoveOrganization(ctx context.Context, name, apiURL, browserURL string) (int, string, error)
-	UpdateProjektoveOrganization(ctx context.Context, uuid string, name, apiURL, browserURL string) error
+	UpdateProjektoveOrganization(ctx context.Context, uuid string, apiURL, browserURL string) error
 	StoreOrganizationUser(ctx context.Context, orgID int, name string, projektoveID int) error
 	DeleteOrganizationUser(ctx context.Context, orgID int, uuid string) error
 }

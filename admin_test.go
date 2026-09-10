@@ -32,7 +32,7 @@ func newAdminTestServer(t *testing.T, repo Repository) (http.Handler, *AuthCompo
 	baseURL, err := url.Parse("http://app.test")
 	require.NoError(t, err)
 	logout := NewEndpoint(http.MethodGet, "", "/logout")
-	handler := NewHandler(auth, baseURL.String(), Controller{Repository: repo}, logout)
+	handler := NewHandler(auth, baseURL, Controller{Repository: repo}, logout)
 
 	return handler, auth.(*AuthComposite), user, admin
 }
@@ -96,7 +96,8 @@ func TestAdminCreateOrganization_AdminCreatesOrg(t *testing.T) {
 		"api_url":     {"https://api.example.com"},
 		"browser_url": {"https://app.example.com"},
 	}.Encode())
-	assert.Equal(t, http.StatusSeeOther, rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotEmpty(t, rec.Header().Get("HX-Location"))
 
 	orgs, err := repo.ListProjektoveOrganizations(t.Context())
 	require.NoError(t, err)
@@ -162,17 +163,16 @@ func TestAdminUpdateOrganization_AdminUpdates(t *testing.T) {
 	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
-	rec := adminRequest(handler, auth, admin, http.MethodPost, "/api/admin/organizations/"+orgUUID, url.Values{
+	rec := adminRequest(handler, auth, admin, http.MethodPut, "/api/admin/organizations/"+orgUUID, url.Values{
 		"name":        {"acme2"},
 		"api_url":     {"https://api2.example.com"},
 		"browser_url": {"https://app2.example.com"},
 	}.Encode())
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "acme2")
+	assert.Contains(t, rec.Body.String(), "https://api2.example.com")
 
 	got, err := repo.GetProjektoveOrganizationByUUID(t.Context(), orgUUID)
 	require.NoError(t, err)
-	assert.Equal(t, "acme2", got.Name)
 	assert.Equal(t, "https://api2.example.com", got.APIURL)
 }
 

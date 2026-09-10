@@ -1155,15 +1155,14 @@ func TestUpdateProjektoveOrganization(t *testing.T) {
 	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
-	require.NoError(t, repo.UpdateProjektoveOrganization(t.Context(), orgUUID, "acme2", "https://api2.example.com", "https://app2.example.com"))
+	require.NoError(t, repo.UpdateProjektoveOrganization(t.Context(), orgUUID, "https://api2.example.com", "https://app2.example.com"))
 
 	got, err := repo.GetProjektoveOrganizationByUUID(t.Context(), orgUUID)
 	require.NoError(t, err)
-	assert.Equal(t, "acme2", got.Name)
 	assert.Equal(t, "https://api2.example.com", got.APIURL)
 	assert.Equal(t, "https://app2.example.com", got.BrowserURL)
 
-	err = repo.UpdateProjektoveOrganization(t.Context(), "missing", "nope", "nope", "nope")
+	err = repo.UpdateProjektoveOrganization(t.Context(), "nope", "nope", "nope")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
 }

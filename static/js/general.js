@@ -32,7 +32,7 @@ function displaySuccess(msg) {
 
 // toasts
 document.addEventListener("htmx:response:error", (e) => {
-  displayError(e.detail.xhr.responseText.trim());
+  displayError(e.detail.ctx.text.trim());
 });
 
 document.addEventListener("htmx:after:request", (e) => {

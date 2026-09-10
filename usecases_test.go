@@ -11,11 +11,11 @@ import (
 )
 
 type fakeProjektove struct {
-	createResult    ProjektoveIssue
-	createErr       error
-	created         []ProjektoveIssueCreate
-	getProjectsRes  []ProjektoveProject
-	getProjectsErr  error
+	createResult     ProjektoveIssue
+	createErr        error
+	created          []ProjektoveIssueCreate
+	getProjectsRes   []ProjektoveProject
+	getProjectsErr   error
 	getProjectsCalls int
 }
 
@@ -1016,16 +1016,12 @@ func TestControllerUpdateOrganization(t *testing.T) {
 	require.NoError(t, err)
 
 	c := Controller{Repository: repo}
-	require.NoError(t, c.UpdateOrganization(t.Context(), orgUUID, "acme2", "https://api2.example.com", "https://app2.example.com"))
+	require.NoError(t, c.UpdateOrganization(t.Context(), orgUUID, "https://api2.example.com", "https://app2.example.com"))
 
-	view, err := c.GetAdminOrganization(t.Context(), orgUUID)
-	require.NoError(t, err)
-	assert.Equal(t, "acme2", view.Name)
-
-	err = c.UpdateOrganization(t.Context(), orgUUID, "", "x", "y")
+	err = c.UpdateOrganization(t.Context(), orgUUID, "", "y")
 	assert.True(t, errors.Is(err, ErrInvalidArgument))
 
-	err = c.UpdateOrganization(t.Context(), "missing", "x", "y", "z")
+	err = c.UpdateOrganization(t.Context(), "missing", "y", "z")
 	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
 }
 

@@ -93,7 +93,7 @@ func run() error {
 		return fmt.Errorf("when constructing auth adapter: %w", err)
 	}
 
-	handler := projektovemeeting.NewHandler(auth, "/", controller, endpointLogout)
+	handler := projektovemeeting.NewHandler(auth, baseURL, controller, endpointLogout)
 
 	port := 80
 

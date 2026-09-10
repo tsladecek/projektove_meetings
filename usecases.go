@@ -906,6 +906,15 @@ func (c Controller) CreateOrganization(ctx context.Context, name, apiURL, browse
 		return "", fmt.Errorf("name, api url and browser url are required: %w", ErrInvalidArgument)
 	}
 
+	_, err := c.Repository.GetProjektoveOrganizationByName(ctx, name)
+	if err == nil {
+		return "", ErrOrganizationExists
+	}
+
+	if !errors.Is(err, ErrOrganizationNotFound) {
+		return "", fmt.Errorf("when checking if organization exists before creating: %w", err)
+	}
+
 	_, uuid, err := c.Repository.StoreProjektoveOrganization(ctx, name, apiURL, browserURL)
 	if err != nil {
 		return "", fmt.Errorf("when storing organization: %w", err)
@@ -914,12 +923,12 @@ func (c Controller) CreateOrganization(ctx context.Context, name, apiURL, browse
 	return uuid, nil
 }
 
-func (c Controller) UpdateOrganization(ctx context.Context, uuid string, name, apiURL, browserURL string) error {
-	if strings.TrimSpace(name) == "" || strings.TrimSpace(apiURL) == "" || strings.TrimSpace(browserURL) == "" {
+func (c Controller) UpdateOrganization(ctx context.Context, uuid string, apiURL, browserURL string) error {
+	if strings.TrimSpace(apiURL) == "" || strings.TrimSpace(browserURL) == "" {
 		return fmt.Errorf("name, api url and browser url are required: %w", ErrInvalidArgument)
 	}
 
-	if err := c.Repository.UpdateProjektoveOrganization(ctx, uuid, name, apiURL, browserURL); err != nil {
+	if err := c.Repository.UpdateProjektoveOrganization(ctx, uuid, apiURL, browserURL); err != nil {
 		return fmt.Errorf("when updating organization: %w", err)
 	}
 
