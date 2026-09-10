@@ -29,7 +29,7 @@ type ConfigLogging struct {
 
 type ConfigAuth struct {
 	SecretKey       string `toml:"secret_key" env:"SECRETKEY"`
-	DefaultUser     string `toml:"default_user" env:"DEFAULTUSER" env-default:"admin"`
+	DefaultUser     string `toml:"default_user" env:"DEFAULTUSER" env-default:"admin@admin.com"`
 	DefaultPassword string `toml:"default_password" env:"DEFAULTPASSWORD" env-default:"password"`
 
 	EndpointLogin  string `toml:"endpoint_login" env:"ENDPOINTLOGIN" env-default:"/login"`
