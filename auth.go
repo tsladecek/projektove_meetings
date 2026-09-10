@@ -29,7 +29,7 @@ type AuthOIDC struct {
 	provider          *oidc.Provider
 	idTokenCookieName string
 	refreshCookieName string
-	baseURL           string
+	baseURL           *url.URL
 	issuer            string
 
 	callbackEndpoint string
@@ -40,13 +40,13 @@ type AuthOIDC struct {
 	loginURL string
 }
 
-func NewAuthOIDC(repo Repository, config ConfigOIDC, baseURL, loginURL string) (*AuthOIDC, error) {
+func NewAuthOIDC(repo Repository, config ConfigOIDC, baseURL *url.URL, loginURL string) (*AuthOIDC, error) {
 	provider, err := oidc.NewProvider(context.Background(), config.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("when discovering oidc provider %q: %w", config.Issuer, err)
 	}
 
-	callbackURL, err := url.JoinPath(baseURL, config.CallbackEndpoint)
+	callbackURL := baseURL.JoinPath(config.CallbackEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("when parsing callback url %q: %w", config.CallbackEndpoint, err)
 	}
@@ -54,7 +54,7 @@ func NewAuthOIDC(repo Repository, config ConfigOIDC, baseURL, loginURL string) (
 	oauth2Config := oauth2.Config{
 		ClientID:     config.ClientID,
 		ClientSecret: config.ClientSecret,
-		RedirectURL:  callbackURL,
+		RedirectURL:  callbackURL.String(),
 		Endpoint:     provider.Endpoint(),
 		Scopes:       []string{oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail},
 	}
@@ -70,7 +70,7 @@ func NewAuthOIDC(repo Repository, config ConfigOIDC, baseURL, loginURL string) (
 		provider:          provider,
 		idTokenCookieName: config.IDTokenCookieName,
 		refreshCookieName: refreshTokenCookieName,
-		callbackEndpoint:  config.CallbackEndpoint,
+		callbackEndpoint:  callbackURL.Path,
 		oauth2Config:      oauth2Config,
 		authCodeURL:       oauth2Config.AuthCodeURL(""),
 		baseURL:           baseURL,
@@ -210,7 +210,7 @@ func (a AuthOIDC) RegisterRoutes(m *http.ServeMux) {
 			setAuthCookie(w, a.refreshCookieName, oauth2Token.RefreshToken)
 		}
 		slog.Debug("Authentication Successful")
-		http.Redirect(w, r, a.baseURL, http.StatusFound)
+		http.Redirect(w, r, a.baseURL.String(), http.StatusFound)
 	})
 }
 
@@ -306,7 +306,7 @@ func NewAuth(repo Repository, oidcConfig *ConfigOIDC, secretKey string, endpoint
 	var oidcAuth *AuthOIDC
 	if oidcConfig != nil && oidcConfig.Issuer != "" {
 		var err error
-		oidcAuth, err = NewAuthOIDC(repo, *oidcConfig, baseURL.String(), loginURL)
+		oidcAuth, err = NewAuthOIDC(repo, *oidcConfig, baseURL, loginURL)
 		if err != nil {
 			return nil, fmt.Errorf("when constructing OIDC auth: %w", err)
 		}

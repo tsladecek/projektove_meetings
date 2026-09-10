@@ -414,6 +414,7 @@ func TestMiddlewareAuth_RefreshFails(t *testing.T) {
 func TestCallback_SetsRefreshCookie(t *testing.T) {
 	repo := newRepository(t)
 	verifier, issuer := authVerifier(t, testClientID)
+	burl, _ := url.Parse("http://app.test")
 	auth := AuthOIDC{
 		repo:              repo,
 		verifier:          verifier,
@@ -421,7 +422,7 @@ func TestCallback_SetsRefreshCookie(t *testing.T) {
 		refreshCookieName: "refresh",
 		callbackEndpoint:  "/oauth2/callback",
 		endSessionURL:     "/oauth2/logout",
-		baseURL:           "http://app.test",
+		baseURL:           burl,
 		oauth2Config: oauth2.Config{
 			ClientID:     testClientID,
 			ClientSecret: "secret",
