@@ -199,21 +199,21 @@ type Issue struct {
 }
 
 type Prompt struct {
-	ID                            int
-	UUID                          string
-	Prompt                        string
-	Result                        string
-	Error                         string
-	Context                       LLMContext
-	Status                        PromptStatus
-	ModelID                       int
-	Provider                      string
-	Model                         string
-	FileContent                   string
-	CreatedAt                     time.Time
-	UserProjektoveOrganizationID  int
-	TotalIssues                   int
-	SubmittedIssues               int
+	ID                           int
+	UUID                         string
+	Prompt                       string
+	Result                       string
+	Error                        string
+	Context                      LLMContext
+	Status                       PromptStatus
+	ModelID                      int
+	Provider                     string
+	Model                        string
+	FileContent                  string
+	CreatedAt                    time.Time
+	UserProjektoveOrganizationID int
+	TotalIssues                  int
+	SubmittedIssues              int
 }
 
 type LLMContext struct {

@@ -26,7 +26,7 @@ var (
 	ErrOrganizationNotFound               = errors.New("projektove organization not found")
 	ErrOrganizationNotConfigured          = errors.New("projektove organization is not configured")
 	ErrInvalidCredentials                 = errors.New("invalid credentials")
-	ErrInvalidArgument                   = errors.New("invalid argument")
+	ErrInvalidArgument                    = errors.New("invalid argument")
 )
 
 // BatchCSVError carries the list of human-readable validation problems found
