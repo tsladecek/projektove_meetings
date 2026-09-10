@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -307,6 +308,7 @@ func authCompositeWithOIDC(t *testing.T, repo Repository) (*AuthComposite, strin
 	t.Helper()
 	oidcAuth, issuer := authOIDCWithTokenEndpoint(t, repo)
 	hmacKey := sha256.Sum256([]byte("test-secret-key"))
+	u, _ := url.Parse("http://app.test")
 	return &AuthComposite{
 		oidc:                 &oidcAuth,
 		repo:                 repo,
@@ -314,7 +316,7 @@ func authCompositeWithOIDC(t *testing.T, repo Repository) (*AuthComposite, strin
 		loginEndpoint:        NewEndpoint(http.MethodGet, "", "/login"),
 		authenticateEndpoint: NewEndpoint(http.MethodPost, "", "/login"),
 		logoutEndpoint:       NewEndpoint(http.MethodGet, "", "/logout"),
-		baseURL:              "http://app.test",
+		baseURL:              u,
 	}, issuer
 }
 

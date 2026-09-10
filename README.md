@@ -6,22 +6,29 @@ You upload meeting minutes (as an unstructured document or a structured CSV tabl
 extracts the issues from them, lets you review and edit everything, and then submits them to
 your Projektove instance — one by one or all at once.
 
+## tldr.
+
+```
+mkdir data
+docker run -v ./data/:/data --env DB=/data/db.sqlite --env AUTH_DEFAULTUSER=admin@admin.com --env AUTH_DEFAULTPASSWORD=password --env AUTH_SECRETKEY=secret -p 8000:8000 ghcr.io/tsladecek/projektove_meetings
+```
+
 ## What it does
 
-1. **Authenticate** via an OIDC provider (e.g. Keycloak). On first login, set up the app on
+1. **Authenticate** via an OIDC provider (e.g. Keycloak) or Self auth `admin@admin.com:password`. On first login, set up the app on
    the **User** page: store your Projektove token, add LLM models (provider + model + token),
    and define reusable *contexts* (custom instructions that shape how the LLM extracts issues).
 
 2. **Upload meeting notes** through one of two flows:
 
-   - [Prompts](/prompts/new) — for unstructured meeting notes. You attach the notes, pick a
+   - **Prompts** — for unstructured meeting notes. You attach the notes, pick a
      context, and the LLM extracts the issues from them.
-   - [Batches](/batches/new) — for structured tables. You upload a CSV with the required columns
+   - **Batches** — for structured tables. You upload a CSV with the required columns
      (the server validates the file before importing; the raw file content is stored as well).
 
 3. **Review the result**, on the prompt or batch detail page. Each extracted issue shows subject,
    description, project, assignee, and start/due dates. Issues stay editable until submitted, and
-   can be removed (soft-deleted, marked `deleted`) so they are not counted for submission.
+   can be ignored.
 
 4. **Submit to Projektove.** Send issues one by one or via "Submit all". Once an issue is
    successfully created, its status turns `submitted`, the Projektove link is stored, and the
@@ -29,7 +36,7 @@ your Projektove instance — one by one or all at once.
 
 ## How it works
 
-- Single-page app built with **HTMX v4**; all UI is rendered server-side with **gomponents**
+- Frontend built with **HTMX v4**; all UI is rendered server-side with **gomponents**
   and styled with **Tailwind** (utility classes only, no custom CSS rules).
 - A background queue worker (an SQLite-backed `tasks` table) asynchronously runs the LLM
   inference, so prompts page shows a spinner until the result is ready. Submissions are
