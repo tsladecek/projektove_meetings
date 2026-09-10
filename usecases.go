@@ -59,7 +59,7 @@ func (c Controller) RunInference(ctx context.Context, job InferenceJob) error {
 		return err
 	}
 
-	promptText, err := buildInferencePrompt(projects, orgUsers, prompt.Context.Context, prompt.FileContent)
+	promptText, err := buildInferencePrompt(projects, orgUsers, combineContexts(prompt.Context.Context, prompt.PromptContext), prompt.FileContent)
 	if err != nil {
 		c.failPrompt(ctx, org, job.PromptID, PromptComplete{}, err)
 		return err
@@ -124,6 +124,21 @@ func (c Controller) failPrompt(ctx context.Context, org UserProjektoveOrganizati
 	}); err != nil {
 		slog.Error("Failed to mark prompt as errored", "prompt_id", promptID, "err", err.Error())
 	}
+}
+
+func combineContexts(general, specific string) string {
+	general = strings.TrimSpace(general)
+	specific = strings.TrimSpace(specific)
+	if general == "" && specific == "" {
+		return ""
+	}
+	if general == "" {
+		return specific
+	}
+	if specific == "" {
+		return general
+	}
+	return general + "\n---\n" + specific
 }
 
 func buildInferencePrompt(projects []ProjektoveProject, users []ProjektoveUser, contextText, meeting string) (string, error) {
@@ -360,7 +375,7 @@ func (c Controller) DeleteContext(ctx context.Context, user User, uuid string) e
 	return nil
 }
 
-func (c Controller) CreatePrompt(ctx context.Context, user User, userModelUUID, orgUUID string, contextID int, meeting string) (string, error) {
+func (c Controller) CreatePrompt(ctx context.Context, user User, userModelUUID, orgUUID string, contextID int, promptContext, meeting string) (string, error) {
 	org, err := c.Repository.GetUserProjektoveOrganization(ctx, orgUUID)
 	if err != nil {
 		return "", err
@@ -379,6 +394,7 @@ func (c Controller) CreatePrompt(ctx context.Context, user User, userModelUUID, 
 	if err := c.TxProvider.Transact(func(repo Repository) error {
 		id, uuid, err := repo.StorePrompt(ctx, org, PromptCreate{
 			ContextID:                    contextID,
+			PromptContext:                promptContext,
 			Status:                       PromptStatusCreated,
 			ModelID:                      userModel.ModelID,
 			FileContent:                  meeting,
@@ -463,6 +479,7 @@ func (c Controller) ListPrompts(ctx context.Context, user User, limit, offset in
 	for _, p := range prompts {
 		items = append(items, PromptListItem{
 			ID:              p.UUID,
+			PromptContext:   p.PromptContext,
 			ContextName:     p.Context.Name,
 			Status:          p.Status,
 			CreatedAt:       p.CreatedAt,
@@ -514,15 +531,16 @@ func (c Controller) buildPromptView(ctx context.Context, user User, org UserProj
 	}
 
 	view := PromptView{
-		ID:          prompt.UUID,
-		Prompt:      prompt.Prompt,
-		Result:      prompt.Result,
-		Error:       prompt.Error,
-		ContextName: prompt.Context.Name,
-		Status:      prompt.Status,
-		Issues:      toIssueViews(issues),
-		Model:       prompt.Provider + " / " + prompt.Model,
-		OrgID:       org.UUID,
+		ID:            prompt.UUID,
+		Prompt:        prompt.Prompt,
+		Result:        prompt.Result,
+		Error:         prompt.Error,
+		PromptContext: prompt.PromptContext,
+		ContextName:   prompt.Context.Name,
+		Status:        prompt.Status,
+		Issues:        toIssueViews(issues),
+		Model:         prompt.Provider + " / " + prompt.Model,
+		OrgID:         org.UUID,
 	}
 
 	return view, nil

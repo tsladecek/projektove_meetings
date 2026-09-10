@@ -65,6 +65,7 @@ type PromptCreate struct {
 	Prompt                       string
 	Result                       string
 	Error                        error
+	PromptContext                string
 	ContextID                    int
 	Status                       PromptStatus
 	ModelID                      int
@@ -134,15 +135,16 @@ type IssueView struct {
 }
 
 type PromptView struct {
-	ID          string
-	Prompt      string
-	Result      string
-	Error       string
-	ContextName string
-	Status      PromptStatus
-	Model       string
-	OrgID       string
-	Issues      []IssueView
+	ID            string
+	Prompt        string
+	Result        string
+	Error         string
+	PromptContext string
+	ContextName   string
+	Status        PromptStatus
+	Model         string
+	OrgID         string
+	Issues        []IssueView
 }
 
 type IssueUpdateView struct {
@@ -161,6 +163,7 @@ type ProjectOptionView struct {
 
 type PromptListItem struct {
 	ID              string
+	PromptContext   string
 	ContextName     string
 	Status          PromptStatus
 	CreatedAt       time.Time

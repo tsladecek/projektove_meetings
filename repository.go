@@ -130,8 +130,8 @@ func (r *RepositorySqlite) StorePrompt(ctx context.Context, org UserProjektoveOr
 
 	uuid := newUUID()
 
-	query := `INSERT INTO prompts (uuid, prompt, result, error, context_id, status, model_id, file_content, created_at, user_projektove_organization_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	result, execErr := r.DB.ExecContext(ctx, query, uuid, obj.Prompt, obj.Result, errStr, obj.ContextID, obj.Status, obj.ModelID, obj.FileContent, obj.CreatedAt, org.ID)
+	query := `INSERT INTO prompts (uuid, prompt, result, error, context, context_id, status, model_id, file_content, created_at, user_projektove_organization_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	result, execErr := r.DB.ExecContext(ctx, query, uuid, obj.Prompt, obj.Result, errStr, obj.PromptContext, obj.ContextID, obj.Status, obj.ModelID, obj.FileContent, obj.CreatedAt, org.ID)
 	if execErr != nil {
 		return 0, "", fmt.Errorf("failed to store prompt: %w", execErr)
 	}
@@ -145,7 +145,7 @@ func (r *RepositorySqlite) StorePrompt(ctx context.Context, org UserProjektoveOr
 }
 
 const promptSelect = `
-SELECT p.id, p.uuid, p.prompt, p.result, p.error, p.status, p.model_id, p.file_content, p.created_at, p.user_projektove_organization_id,
+SELECT p.id, p.uuid, p.prompt, p.result, p.error, p.context AS prompt_context, p.status, p.model_id, p.file_content, p.created_at, p.user_projektove_organization_id,
 c.id, c.uuid, c.name, c.context,
 m.model, pr.provider
 FROM prompts p
@@ -158,7 +158,7 @@ func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User, limit, of
 
 	rows, err := r.DB.QueryContext(ctx, `
 	SELECT
-	p.id, p.uuid, p.prompt, p.result, p.error, p.status, p.model_id, p.file_content, p.created_at, p.user_projektove_organization_id,
+	p.id, p.uuid, p.prompt, p.result, p.error, p.context AS prompt_context, p.status, p.model_id, p.file_content, p.created_at, p.user_projektove_organization_id,
 	c.id, c.uuid, c.name, c.context,
 	m.model, pr.provider,
 	(SELECT COUNT(*) FROM issues i WHERE i.parent = 'prompt' AND i.parent_id = p.id) AS total_issues,
@@ -179,7 +179,7 @@ func (r *RepositorySqlite) ListPrompts(ctx context.Context, user User, limit, of
 
 	for rows.Next() {
 		p := Prompt{}
-		if err := rows.Scan(&p.ID, &p.UUID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.ModelID, &p.FileContent, &p.CreatedAt, &p.UserProjektoveOrganizationID, &p.Context.ID, &p.Context.UUID, &p.Context.Name, &p.Context.Context, &p.Model, &p.Provider, &p.TotalIssues, &p.SubmittedIssues); err != nil {
+		if err := rows.Scan(&p.ID, &p.UUID, &p.Prompt, &p.Result, &p.Error, &p.PromptContext, &p.Status, &p.ModelID, &p.FileContent, &p.CreatedAt, &p.UserProjektoveOrganizationID, &p.Context.ID, &p.Context.UUID, &p.Context.Name, &p.Context.Context, &p.Model, &p.Provider, &p.TotalIssues, &p.SubmittedIssues); err != nil {
 			return nil, false, fmt.Errorf("when scanning results: %w", err)
 		}
 		prompts = append(prompts, p)
@@ -229,7 +229,7 @@ func (r *RepositorySqlite) GetPromptByUUID(ctx context.Context, org UserProjekto
 }
 
 func scanPrompt(row *sql.Row, p *Prompt) error {
-	return row.Scan(&p.ID, &p.UUID, &p.Prompt, &p.Result, &p.Error, &p.Status, &p.ModelID, &p.FileContent, &p.CreatedAt, &p.UserProjektoveOrganizationID, &p.Context.ID, &p.Context.UUID, &p.Context.Name, &p.Context.Context, &p.Model, &p.Provider)
+	return row.Scan(&p.ID, &p.UUID, &p.Prompt, &p.Result, &p.Error, &p.PromptContext, &p.Status, &p.ModelID, &p.FileContent, &p.CreatedAt, &p.UserProjektoveOrganizationID, &p.Context.ID, &p.Context.UUID, &p.Context.Name, &p.Context.Context, &p.Model, &p.Provider)
 }
 
 func (r *RepositorySqlite) SetPromptProcessing(ctx context.Context, org UserProjektoveOrganization, id int, prompt string) error {

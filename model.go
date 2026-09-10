@@ -204,6 +204,7 @@ type Prompt struct {
 	Prompt                       string
 	Result                       string
 	Error                        string
+	PromptContext                string
 	Context                      LLMContext
 	Status                       PromptStatus
 	ModelID                      int

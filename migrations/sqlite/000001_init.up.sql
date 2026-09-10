@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS prompts (
     prompt TEXT NOT NULL,
     result TEXT,
     error TEXT,
-    context_id INTEGER NOT NULL,
+    context TEXT, -- prompt specific context
+    context_id INTEGER NOT NULL, -- general context
     status TEXT NOT NULL CHECK(status IN ('created', 'processing', 'done', 'error')),
     model_id INTEGER NOT NULL,
     file_content TEXT NOT NULL DEFAULT '',

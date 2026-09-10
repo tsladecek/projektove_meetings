@@ -901,7 +901,7 @@ func (a api) createPrompt() http.HandlerFunc {
 			return
 		}
 
-		promptUUID, err := a.controller.CreatePrompt(r.Context(), user, modelUUID, orgUUID, context.ID, string(meeting))
+		promptUUID, err := a.controller.CreatePrompt(r.Context(), user, modelUUID, orgUUID, context.ID, r.Form.Get("prompt_context"), string(meeting))
 		if err != nil {
 			if errors.Is(err, ErrProjektoveTokenNotConfigured) {
 				contexts, ctxErr := a.controller.ListContexts(r.Context(), user)
@@ -2105,6 +2105,17 @@ func (c components) NewPromptPage(contexts []ContextView, models []UserModel, or
 
 			h.Div(
 				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Prompt context (optional)")),
+				h.Textarea(
+					h.Name("prompt_context"),
+					h.Class("w-full px-3 py-2 border rounded"),
+					h.Placeholder("Additional context specific to this prompt..."),
+					h.Rows("3"),
+				),
+			),
+
+			h.Div(
+				h.Class("space-y-2"),
 				h.Label(h.Class("block text-sm font-medium"), g.Text("Meeting notes")),
 				h.Input(
 					h.Type("file"),
@@ -2203,6 +2214,12 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 				h.Class("text-sm text-gray-500"),
 				g.Text("Context: "+view.ContextName),
 			),
+			g.If(view.PromptContext != "",
+				h.Div(
+					h.Class("text-sm text-gray-500"),
+					g.Text("Prompt context: "+view.PromptContext),
+				),
+			),
 			h.Div(
 				h.Class("flex items-center gap-3 text-gray-500 py-8"),
 				solid.ArrowPath(h.Class("h-5 w-5 animate-spin")),
@@ -2223,6 +2240,12 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 			h.Div(
 				h.Class("text-sm text-gray-500"),
 				g.Text("Context: "+view.ContextName),
+			),
+			g.If(view.PromptContext != "",
+				h.Div(
+					h.Class("text-sm text-gray-500"),
+					g.Text("Prompt context: "+view.PromptContext),
+				),
 			),
 		),
 	}

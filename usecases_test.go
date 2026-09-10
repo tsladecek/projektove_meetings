@@ -473,7 +473,7 @@ func TestControllerCreatePrompt_EnqueuesTask(t *testing.T) {
 
 	c := Controller{Repository: repo, TxProvider: txp, Projektove: &fakeProjektove{}}
 
-	promptUUID, err := c.CreatePrompt(t.Context(), user, um.UUID, org.UUID, contextID, "meeting notes")
+	promptUUID, err := c.CreatePrompt(t.Context(), user, um.UUID, org.UUID, contextID, "", "meeting notes")
 	require.NoError(t, err)
 	require.NotEmpty(t, promptUUID)
 
@@ -505,7 +505,7 @@ func TestControllerCreatePrompt_ModelNotFound(t *testing.T) {
 		Projektove: &fakeProjektove{},
 	}
 
-	_, err := c.CreatePrompt(t.Context(), user, "does-not-exist", org.UUID, contextID, "meeting notes")
+	_, err := c.CreatePrompt(t.Context(), user, "does-not-exist", org.UUID, contextID, "", "meeting notes")
 	assert.True(t, errors.Is(err, ErrUserModelNotFound))
 
 	// nothing was stored since the transaction was aborted before the task
@@ -524,7 +524,7 @@ func TestControllerCreatePrompt_MissingToken(t *testing.T) {
 
 	c := Controller{Repository: repo, TxProvider: txp, Projektove: &fakeProjektove{}}
 
-	_, err := c.CreatePrompt(t.Context(), user, um.UUID, org.UUID, contextID, "meeting notes")
+	_, err := c.CreatePrompt(t.Context(), user, um.UUID, org.UUID, contextID, "", "meeting notes")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrProjektoveTokenNotConfigured))
 
