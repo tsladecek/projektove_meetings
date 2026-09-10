@@ -1,3 +1,4 @@
+DROP INDEX IF EXISTS idx_projects_org;
 DROP TABLE IF EXISTS issues;
 DROP TABLE IF EXISTS issue_batches;
 DROP TABLE IF EXISTS projects;
