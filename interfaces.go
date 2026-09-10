@@ -69,12 +69,12 @@ type Repository interface {
 	StoreUserProjectoveOrganization(ctx context.Context, userID int, orgID int, token string) (string, error)
 	ListOrganizationUsers(ctx context.Context, orgID int) ([]ProjektoveOrganizationUser, error)
 	ListProjektoveOrganizations(ctx context.Context) ([]ProjektoveOrganization, error)
-	GetProjektoveOrganization(ctx context.Context, id int) (ProjektoveOrganization, error)
+	GetProjektoveOrganizationByUUID(ctx context.Context, uuid string) (ProjektoveOrganization, error)
 	GetProjektoveOrganizationByName(ctx context.Context, name string) (ProjektoveOrganization, error)
-	StoreProjektoveOrganization(ctx context.Context, name, apiURL, browserURL string) (int, error)
-	UpdateProjektoveOrganization(ctx context.Context, id int, name, apiURL, browserURL string) error
+	StoreProjektoveOrganization(ctx context.Context, name, apiURL, browserURL string) (int, string, error)
+	UpdateProjektoveOrganization(ctx context.Context, uuid string, name, apiURL, browserURL string) error
 	StoreOrganizationUser(ctx context.Context, orgID int, name string, projektoveID int) error
-	DeleteOrganizationUser(ctx context.Context, orgID int, id int) error
+	DeleteOrganizationUser(ctx context.Context, orgID int, uuid string) error
 }
 
 type Tokens struct {

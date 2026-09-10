@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS users_projektove_organizations (
 
 CREATE TABLE IF NOT EXISTS projektove_organizations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL UNIQUE,
     api_url TEXT NOT NULL,
     browser_url TEXT NOT NULL
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS projektove_organizations (
 -- table of projektove users within the organization
 CREATE TABLE IF NOT EXISTS projektove_organizations_users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
     organization_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     projektove_id INTEGER NOT NULL,

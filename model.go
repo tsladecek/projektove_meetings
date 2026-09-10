@@ -151,6 +151,7 @@ type UserModel struct {
 
 type ProjektoveOrganization struct {
 	ID         int
+	UUID       string
 	Name       string
 	APIURL     string
 	BrowserURL string
@@ -158,6 +159,7 @@ type ProjektoveOrganization struct {
 
 type ProjektoveOrganizationUser struct {
 	ID             int
+	UUID           string
 	OrganizationID int
 	Name           string
 	ProjektoveID   int

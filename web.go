@@ -479,13 +479,7 @@ func (a api) adminNewOrganization() http.HandlerFunc {
 
 func (a api) adminOrganization() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.Atoi(r.PathValue("id"))
-		if err != nil {
-			WriteError(w, "invalid organization", http.StatusBadRequest, nil)
-			return
-		}
-
-		view, err := a.controller.GetAdminOrganization(r.Context(), id)
+		view, err := a.controller.GetAdminOrganization(r.Context(), r.PathValue("id"))
 		if err != nil {
 			if errors.Is(err, ErrOrganizationNotFound) {
 				WriteError(w, "organization not found", http.StatusNotFound, nil)
@@ -519,7 +513,7 @@ func (a api) adminCreateOrganization() http.HandlerFunc {
 			return
 		}
 
-		id, err := a.controller.CreateOrganization(r.Context(), r.Form.Get("name"), r.Form.Get("api_url"), r.Form.Get("browser_url"))
+		orgUUID, err := a.controller.CreateOrganization(r.Context(), r.Form.Get("name"), r.Form.Get("api_url"), r.Form.Get("browser_url"))
 		if err != nil {
 			if errors.Is(err, ErrInvalidArgument) {
 				a.page(w, r, a.components.AdminNewOrganizationPage([]string{"All fields are required"}))
@@ -529,29 +523,25 @@ func (a api) adminCreateOrganization() http.HandlerFunc {
 			return
 		}
 
-		redirectPath := strings.Replace(a.components.endpoints.adminOrganization.Path(), "{id}", strconv.Itoa(id), 1)
+		redirectPath := strings.Replace(a.components.endpoints.adminOrganization.Path(), "{id}", orgUUID, 1)
 		http.Redirect(w, r, redirectPath, http.StatusSeeOther)
 	}
 }
 
 func (a api) adminUpdateOrganization() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.Atoi(r.PathValue("id"))
-		if err != nil {
-			WriteError(w, "invalid organization", http.StatusBadRequest, nil)
-			return
-		}
+		orgUUID := r.PathValue("id")
 
 		if err := r.ParseForm(); err != nil {
 			WriteError(w, "invalid form", http.StatusBadRequest, err)
 			return
 		}
 
-		err = a.controller.UpdateOrganization(r.Context(), id, r.Form.Get("name"), r.Form.Get("api_url"), r.Form.Get("browser_url"))
+		err := a.controller.UpdateOrganization(r.Context(), orgUUID, r.Form.Get("name"), r.Form.Get("api_url"), r.Form.Get("browser_url"))
 		if err != nil {
 			if errors.Is(err, ErrInvalidArgument) {
 				w.Header().Set("X-Error", "All fields are required")
-				view, _ := a.controller.GetAdminOrganization(r.Context(), id)
+				view, _ := a.controller.GetAdminOrganization(r.Context(), orgUUID)
 				a.components.AdminOrgDetailsForm(view, nil).Render(w)
 				return
 			}
@@ -564,7 +554,7 @@ func (a api) adminUpdateOrganization() http.HandlerFunc {
 		}
 
 		withSuccessToast(w)
-		view, err := a.controller.GetAdminOrganization(r.Context(), id)
+		view, err := a.controller.GetAdminOrganization(r.Context(), orgUUID)
 		if err != nil {
 			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
 			return
@@ -575,11 +565,7 @@ func (a api) adminUpdateOrganization() http.HandlerFunc {
 
 func (a api) adminAddOrgUser() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.Atoi(r.PathValue("id"))
-		if err != nil {
-			WriteError(w, "invalid organization", http.StatusBadRequest, nil)
-			return
-		}
+		orgUUID := r.PathValue("id")
 
 		if err := r.ParseForm(); err != nil {
 			WriteError(w, "invalid form", http.StatusBadRequest, err)
@@ -587,15 +573,15 @@ func (a api) adminAddOrgUser() http.HandlerFunc {
 		}
 
 		projektoveID, _ := strconv.Atoi(r.Form.Get("projektove_id"))
-		if err := a.controller.AddOrganizationUser(r.Context(), id, r.Form.Get("name"), projektoveID); err != nil {
+		if err := a.controller.AddOrganizationUser(r.Context(), orgUUID, r.Form.Get("name"), projektoveID); err != nil {
 			if errors.Is(err, ErrOrganizationNotFound) {
 				WriteError(w, "organization not found", http.StatusNotFound, nil)
 				return
 			}
 			if errors.Is(err, ErrInvalidArgument) {
 				w.Header().Set("X-Error", "Name and Projektove ID are required")
-				view, _ := a.controller.GetAdminOrganization(r.Context(), id)
-				a.components.AdminOrgUsersList(view.Users, id).Render(w)
+				view, _ := a.controller.GetAdminOrganization(r.Context(), orgUUID)
+				a.components.AdminOrgUsersList(view.Users, orgUUID).Render(w)
 				return
 			}
 			WriteError(w, "failed to add organization user", http.StatusInternalServerError, err)
@@ -603,29 +589,21 @@ func (a api) adminAddOrgUser() http.HandlerFunc {
 		}
 
 		withSuccessToast(w)
-		view, err := a.controller.GetAdminOrganization(r.Context(), id)
+		view, err := a.controller.GetAdminOrganization(r.Context(), orgUUID)
 		if err != nil {
 			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
 			return
 		}
-		a.components.AdminOrgUsersList(view.Users, id).Render(w)
+		a.components.AdminOrgUsersList(view.Users, orgUUID).Render(w)
 	}
 }
 
 func (a api) adminRemoveOrgUser() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.Atoi(r.PathValue("id"))
-		if err != nil {
-			WriteError(w, "invalid organization", http.StatusBadRequest, nil)
-			return
-		}
-		uid, err := strconv.Atoi(r.PathValue("uid"))
-		if err != nil {
-			WriteError(w, "invalid organization user", http.StatusBadRequest, nil)
-			return
-		}
+		orgUUID := r.PathValue("id")
+		userUUID := r.PathValue("uid")
 
-		if err := a.controller.RemoveOrganizationUser(r.Context(), id, uid); err != nil {
+		if err := a.controller.RemoveOrganizationUser(r.Context(), orgUUID, userUUID); err != nil {
 			if errors.Is(err, ErrOrganizationNotFound) {
 				WriteError(w, "organization user not found", http.StatusNotFound, nil)
 				return
@@ -635,12 +613,12 @@ func (a api) adminRemoveOrgUser() http.HandlerFunc {
 		}
 
 		withSuccessToast(w)
-		view, err := a.controller.GetAdminOrganization(r.Context(), id)
+		view, err := a.controller.GetAdminOrganization(r.Context(), orgUUID)
 		if err != nil {
 			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
 			return
 		}
-		a.components.AdminOrgUsersList(view.Users, id).Render(w)
+		a.components.AdminOrgUsersList(view.Users, orgUUID).Render(w)
 	}
 }
 
@@ -1561,7 +1539,7 @@ func promptStatusDisplay(status PromptStatus) (string, string) {
 func (c components) AdminOrganizationsPage(orgs []AdminOrganizationView) g.Node {
 	rows := []g.Node{}
 	for _, o := range orgs {
-		path := strings.Replace(c.endpoints.adminOrganization.Path(), "{id}", strconv.Itoa(o.ID), 1)
+		path := strings.Replace(c.endpoints.adminOrganization.Path(), "{id}", o.ID, 1)
 		rows = append(rows,
 			h.A(
 				h.Href(path),
@@ -1669,7 +1647,7 @@ func (c components) AdminOrgDetailsForm(view AdminOrganizationView, validationEr
 		)
 	}
 
-	path := strings.Replace(c.endpoints.adminUpdateOrganization.Path(), "{id}", strconv.Itoa(view.ID), 1)
+	path := strings.Replace(c.endpoints.adminUpdateOrganization.Path(), "{id}", view.ID, 1)
 
 	nodes = append(nodes,
 		h.Form(
@@ -1700,10 +1678,10 @@ func (c components) AdminOrgDetailsForm(view AdminOrganizationView, validationEr
 	return h.Div(h.ID("admin-org-form"), g.Group(nodes))
 }
 
-func (c components) AdminOrgUsersList(users []ProjektoveOrganizationUser, orgID int) g.Node {
+func (c components) AdminOrgUsersList(users []ProjektoveOrganizationUser, orgUUID string) g.Node {
 	rows := []g.Node{}
 	for _, u := range users {
-		removePath := strings.Replace(strings.Replace(c.endpoints.adminRemoveOrgUser.Path(), "{id}", strconv.Itoa(orgID), 1), "{uid}", strconv.Itoa(u.ID), 1)
+		removePath := strings.Replace(strings.Replace(c.endpoints.adminRemoveOrgUser.Path(), "{id}", orgUUID, 1), "{uid}", u.UUID, 1)
 		rows = append(rows,
 			h.Tr(
 				h.Td(h.Class("py-2 px-3"), g.Text(u.Name)),
@@ -1721,7 +1699,7 @@ func (c components) AdminOrgUsersList(users []ProjektoveOrganizationUser, orgID 
 		)
 	}
 
-	addPath := strings.Replace(c.endpoints.adminAddOrgUser.Path(), "{id}", strconv.Itoa(orgID), 1)
+	addPath := strings.Replace(c.endpoints.adminAddOrgUser.Path(), "{id}", orgUUID, 1)
 
 	return h.Div(
 		h.ID("org-users-list"),

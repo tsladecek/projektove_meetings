@@ -899,7 +899,7 @@ func TestControllerGetUserProfile_AvailableOrganizations(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
 
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	id, _, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	c := Controller{Repository: repo}
@@ -914,7 +914,7 @@ func TestControllerUpdateUser_AddsNewOrganization(t *testing.T) {
 	repo := newRepository(t)
 	user := storeUser(t, repo, "user@email.com")
 
-	orgID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	orgID, _, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	c := Controller{Repository: repo}
@@ -951,7 +951,7 @@ func TestControllerUpdateUser_SkipsEmptyOrganizationName(t *testing.T) {
 func TestControllerResolveProjectoveOrganization(t *testing.T) {
 	repo := newRepository(t)
 	c := Controller{Repository: repo}
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	id, _, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	org, err := c.ResolveProjectoveOrganization(t.Context(), "acme")
@@ -964,7 +964,7 @@ func TestControllerResolveProjectoveOrganization(t *testing.T) {
 
 func TestControllerListAdminOrganizations(t *testing.T) {
 	repo := newRepository(t)
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	id, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 	require.NoError(t, repo.StoreOrganizationUser(t.Context(), id, "jane", 42))
 
@@ -972,7 +972,7 @@ func TestControllerListAdminOrganizations(t *testing.T) {
 	views, err := c.ListAdminOrganizations(t.Context())
 	require.NoError(t, err)
 	require.Len(t, views, 1)
-	assert.Equal(t, id, views[0].ID)
+	assert.Equal(t, orgUUID, views[0].ID)
 	assert.Equal(t, "acme", views[0].Name)
 	require.Len(t, views[0].Users, 1)
 	assert.Equal(t, "jane", views[0].Users[0].Name)
@@ -980,15 +980,15 @@ func TestControllerListAdminOrganizations(t *testing.T) {
 
 func TestControllerGetAdminOrganization(t *testing.T) {
 	repo := newRepository(t)
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	c := Controller{Repository: repo}
-	view, err := c.GetAdminOrganization(t.Context(), id)
+	view, err := c.GetAdminOrganization(t.Context(), orgUUID)
 	require.NoError(t, err)
-	assert.Equal(t, id, view.ID)
+	assert.Equal(t, orgUUID, view.ID)
 
-	_, err = c.GetAdminOrganization(t.Context(), 999)
+	_, err = c.GetAdminOrganization(t.Context(), "missing")
 	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
 }
 
@@ -996,9 +996,13 @@ func TestControllerCreateOrganization(t *testing.T) {
 	repo := newRepository(t)
 	c := Controller{Repository: repo}
 
-	id, err := c.CreateOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	orgUUID, err := c.CreateOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
-	require.NotZero(t, id)
+	require.NotEmpty(t, orgUUID)
+
+	view, err := c.GetAdminOrganization(t.Context(), orgUUID)
+	require.NoError(t, err)
+	assert.Equal(t, "acme", view.Name)
 
 	_, err = c.CreateOrganization(t.Context(), "", "https://api.example.com", "https://app.example.com")
 	assert.True(t, errors.Is(err, ErrInvalidArgument))
@@ -1006,58 +1010,61 @@ func TestControllerCreateOrganization(t *testing.T) {
 
 func TestControllerUpdateOrganization(t *testing.T) {
 	repo := newRepository(t)
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	c := Controller{Repository: repo}
-	require.NoError(t, c.UpdateOrganization(t.Context(), id, "acme2", "https://api2.example.com", "https://app2.example.com"))
+	require.NoError(t, c.UpdateOrganization(t.Context(), orgUUID, "acme2", "https://api2.example.com", "https://app2.example.com"))
 
-	view, err := c.GetAdminOrganization(t.Context(), id)
+	view, err := c.GetAdminOrganization(t.Context(), orgUUID)
 	require.NoError(t, err)
 	assert.Equal(t, "acme2", view.Name)
 
-	err = c.UpdateOrganization(t.Context(), id, "", "x", "y")
+	err = c.UpdateOrganization(t.Context(), orgUUID, "", "x", "y")
 	assert.True(t, errors.Is(err, ErrInvalidArgument))
 
-	err = c.UpdateOrganization(t.Context(), 999, "x", "y", "z")
+	err = c.UpdateOrganization(t.Context(), "missing", "x", "y", "z")
 	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
 }
 
 func TestControllerAddOrganizationUser(t *testing.T) {
 	repo := newRepository(t)
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	c := Controller{Repository: repo}
-	require.NoError(t, c.AddOrganizationUser(t.Context(), id, "jane", 42))
+	require.NoError(t, c.AddOrganizationUser(t.Context(), orgUUID, "jane", 42))
 
-	view, err := c.GetAdminOrganization(t.Context(), id)
+	view, err := c.GetAdminOrganization(t.Context(), orgUUID)
 	require.NoError(t, err)
 	require.Len(t, view.Users, 1)
 	assert.Equal(t, "jane", view.Users[0].Name)
 	assert.Equal(t, 42, view.Users[0].ProjektoveID)
 
-	err = c.AddOrganizationUser(t.Context(), id, "", 42)
+	err = c.AddOrganizationUser(t.Context(), orgUUID, "", 42)
 	assert.True(t, errors.Is(err, ErrInvalidArgument))
 
-	err = c.AddOrganizationUser(t.Context(), id, "jane", 0)
+	err = c.AddOrganizationUser(t.Context(), orgUUID, "jane", 0)
 	assert.True(t, errors.Is(err, ErrInvalidArgument))
 }
 
 func TestControllerRemoveOrganizationUser(t *testing.T) {
 	repo := newRepository(t)
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
-	require.NoError(t, repo.StoreOrganizationUser(t.Context(), id, "jane", 42))
+
+	org, err := repo.GetProjektoveOrganizationByUUID(t.Context(), orgUUID)
+	require.NoError(t, err)
+	require.NoError(t, repo.StoreOrganizationUser(t.Context(), org.ID, "jane", 42))
 
 	c := Controller{Repository: repo}
-	view, err := c.GetAdminOrganization(t.Context(), id)
+	view, err := c.GetAdminOrganization(t.Context(), orgUUID)
 	require.NoError(t, err)
 	require.Len(t, view.Users, 1)
 
-	require.NoError(t, c.RemoveOrganizationUser(t.Context(), id, view.Users[0].ID))
+	require.NoError(t, c.RemoveOrganizationUser(t.Context(), orgUUID, view.Users[0].UUID))
 
-	view, err = c.GetAdminOrganization(t.Context(), id)
+	view, err = c.GetAdminOrganization(t.Context(), orgUUID)
 	require.NoError(t, err)
 	assert.Empty(t, view.Users)
 }

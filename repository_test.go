@@ -23,7 +23,7 @@ func storeOrg(t *testing.T, repo Repository, user User) UserProjektoveOrganizati
 	require.True(t, ok, "expected *RepositorySqlite")
 
 	name := "org-" + user.Email + "-" + newUUID()
-	result, err := r.DB.ExecContext(t.Context(), "INSERT INTO projektove_organizations (name, api_url, browser_url) VALUES (?, ?, ?)", name, "https://api.example.com", "https://app.example.com")
+	result, err := r.DB.ExecContext(t.Context(), "INSERT INTO projektove_organizations (uuid, name, api_url, browser_url) VALUES (?, ?, ?, ?)", newUUID(), name, "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 	orgID, err := result.LastInsertId()
 	require.NoError(t, err)
@@ -47,7 +47,7 @@ func storeOrgUser(t *testing.T, repo Repository, org UserProjektoveOrganization,
 	t.Helper()
 	r, ok := repo.(*RepositorySqlite)
 	require.True(t, ok, "expected *RepositorySqlite")
-	if _, err := r.DB.ExecContext(t.Context(), "INSERT INTO projektove_organizations_users (organization_id, name, projektove_id) VALUES (?, ?, ?)", org.OrganizationID, name, projektoveID); err != nil {
+	if _, err := r.DB.ExecContext(t.Context(), "INSERT INTO projektove_organizations_users (uuid, organization_id, name, projektove_id) VALUES (?, ?, ?, ?)", newUUID(), org.OrganizationID, name, projektoveID); err != nil {
 		t.Fatalf("failed to store organization user: %v", err)
 	}
 }
@@ -1059,31 +1059,33 @@ func TestGetIssue_ParentNotOwned(t *testing.T) {
 func TestStoreProjektoveOrganization(t *testing.T) {
 	repo := newRepository(t)
 
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	id, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 	require.NotZero(t, id)
+	require.NotEmpty(t, orgUUID)
 
 	orgs, err := repo.ListProjektoveOrganizations(t.Context())
 	require.NoError(t, err)
 	require.Len(t, orgs, 1)
 	assert.Equal(t, id, orgs[0].ID)
+	assert.Equal(t, orgUUID, orgs[0].UUID)
 	assert.Equal(t, "acme", orgs[0].Name)
 	assert.Equal(t, "https://api.example.com", orgs[0].APIURL)
 	assert.Equal(t, "https://app.example.com", orgs[0].BrowserURL)
 }
 
-func TestGetProjektoveOrganization(t *testing.T) {
+func TestGetProjektoveOrganizationByUUID(t *testing.T) {
 	repo := newRepository(t)
 
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
-	got, err := repo.GetProjektoveOrganization(t.Context(), id)
+	got, err := repo.GetProjektoveOrganizationByUUID(t.Context(), orgUUID)
 	require.NoError(t, err)
-	assert.Equal(t, id, got.ID)
+	assert.Equal(t, orgUUID, got.UUID)
 	assert.Equal(t, "acme", got.Name)
 
-	_, err = repo.GetProjektoveOrganization(t.Context(), 999)
+	_, err = repo.GetProjektoveOrganizationByUUID(t.Context(), "missing")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
 }
@@ -1091,12 +1093,13 @@ func TestGetProjektoveOrganization(t *testing.T) {
 func TestGetProjektoveOrganizationByName(t *testing.T) {
 	repo := newRepository(t)
 
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	id, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	got, err := repo.GetProjektoveOrganizationByName(t.Context(), "acme")
 	require.NoError(t, err)
 	assert.Equal(t, id, got.ID)
+	assert.Equal(t, orgUUID, got.UUID)
 	assert.Equal(t, "acme", got.Name)
 
 	_, err = repo.GetProjektoveOrganizationByName(t.Context(), "missing")
@@ -1109,7 +1112,7 @@ func TestStoreUserProjectoveOrganization(t *testing.T) {
 
 	user := storeUser(t, repo, "user@example.com")
 
-	orgID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	orgID, _, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	uuid, err := repo.StoreUserProjectoveOrganization(t.Context(), user.ID, orgID, "tok1")
@@ -1136,18 +1139,18 @@ func TestStoreUserProjectoveOrganization(t *testing.T) {
 func TestUpdateProjektoveOrganization(t *testing.T) {
 	repo := newRepository(t)
 
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
-	require.NoError(t, repo.UpdateProjektoveOrganization(t.Context(), id, "acme2", "https://api2.example.com", "https://app2.example.com"))
+	require.NoError(t, repo.UpdateProjektoveOrganization(t.Context(), orgUUID, "acme2", "https://api2.example.com", "https://app2.example.com"))
 
-	got, err := repo.GetProjektoveOrganization(t.Context(), id)
+	got, err := repo.GetProjektoveOrganizationByUUID(t.Context(), orgUUID)
 	require.NoError(t, err)
 	assert.Equal(t, "acme2", got.Name)
 	assert.Equal(t, "https://api2.example.com", got.APIURL)
 	assert.Equal(t, "https://app2.example.com", got.BrowserURL)
 
-	err = repo.UpdateProjektoveOrganization(t.Context(), 999, "nope", "nope", "nope")
+	err = repo.UpdateProjektoveOrganization(t.Context(), "missing", "nope", "nope", "nope")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
 }
@@ -1155,15 +1158,19 @@ func TestUpdateProjektoveOrganization(t *testing.T) {
 func TestStoreOrganizationUser(t *testing.T) {
 	repo := newRepository(t)
 
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
-	require.NoError(t, repo.StoreOrganizationUser(t.Context(), id, "jane", 42))
-	require.NoError(t, repo.StoreOrganizationUser(t.Context(), id, "john", 43))
+	org, err := repo.GetProjektoveOrganizationByUUID(t.Context(), orgUUID)
+	require.NoError(t, err)
 
-	users, err := repo.ListOrganizationUsers(t.Context(), id)
+	require.NoError(t, repo.StoreOrganizationUser(t.Context(), org.ID, "jane", 42))
+	require.NoError(t, repo.StoreOrganizationUser(t.Context(), org.ID, "john", 43))
+
+	users, err := repo.ListOrganizationUsers(t.Context(), org.ID)
 	require.NoError(t, err)
 	require.Len(t, users, 2)
+	assert.NotEmpty(t, users[0].UUID)
 	assert.Equal(t, "jane", users[0].Name)
 	assert.Equal(t, 42, users[0].ProjektoveID)
 	assert.Equal(t, "john", users[1].Name)
@@ -1172,21 +1179,24 @@ func TestStoreOrganizationUser(t *testing.T) {
 func TestDeleteOrganizationUser(t *testing.T) {
 	repo := newRepository(t)
 
-	id, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
-	require.NoError(t, repo.StoreOrganizationUser(t.Context(), id, "jane", 42))
-	users, err := repo.ListOrganizationUsers(t.Context(), id)
+	org, err := repo.GetProjektoveOrganizationByUUID(t.Context(), orgUUID)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.StoreOrganizationUser(t.Context(), org.ID, "jane", 42))
+	users, err := repo.ListOrganizationUsers(t.Context(), org.ID)
 	require.NoError(t, err)
 	require.Len(t, users, 1)
 
-	require.NoError(t, repo.DeleteOrganizationUser(t.Context(), id, users[0].ID))
+	require.NoError(t, repo.DeleteOrganizationUser(t.Context(), org.ID, users[0].UUID))
 
-	users, err = repo.ListOrganizationUsers(t.Context(), id)
+	users, err = repo.ListOrganizationUsers(t.Context(), org.ID)
 	require.NoError(t, err)
 	assert.Empty(t, users)
 
-	err = repo.DeleteOrganizationUser(t.Context(), 999, 1)
+	err = repo.DeleteOrganizationUser(t.Context(), org.ID, "missing")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrOrganizationNotFound))
 }

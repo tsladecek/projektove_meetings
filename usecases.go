@@ -840,14 +840,14 @@ func (c Controller) ListAdminOrganizations(ctx context.Context) ([]AdminOrganiza
 		if err != nil {
 			return nil, fmt.Errorf("when listing organization users: %w", err)
 		}
-		views = append(views, AdminOrganizationView{ID: o.ID, Name: o.Name, APIURL: o.APIURL, BrowserURL: o.BrowserURL, Users: users})
+		views = append(views, AdminOrganizationView{ID: o.UUID, Name: o.Name, APIURL: o.APIURL, BrowserURL: o.BrowserURL, Users: users})
 	}
 
 	return views, nil
 }
 
-func (c Controller) GetAdminOrganization(ctx context.Context, id int) (AdminOrganizationView, error) {
-	o, err := c.Repository.GetProjektoveOrganization(ctx, id)
+func (c Controller) GetAdminOrganization(ctx context.Context, uuid string) (AdminOrganizationView, error) {
+	o, err := c.Repository.GetProjektoveOrganizationByUUID(ctx, uuid)
 	if err != nil {
 		return AdminOrganizationView{}, err
 	}
@@ -857,48 +857,58 @@ func (c Controller) GetAdminOrganization(ctx context.Context, id int) (AdminOrga
 		return AdminOrganizationView{}, fmt.Errorf("when listing organization users: %w", err)
 	}
 
-	return AdminOrganizationView{ID: o.ID, Name: o.Name, APIURL: o.APIURL, BrowserURL: o.BrowserURL, Users: users}, nil
+	return AdminOrganizationView{ID: o.UUID, Name: o.Name, APIURL: o.APIURL, BrowserURL: o.BrowserURL, Users: users}, nil
 }
 
-func (c Controller) CreateOrganization(ctx context.Context, name, apiURL, browserURL string) (int, error) {
+func (c Controller) CreateOrganization(ctx context.Context, name, apiURL, browserURL string) (string, error) {
 	if strings.TrimSpace(name) == "" || strings.TrimSpace(apiURL) == "" || strings.TrimSpace(browserURL) == "" {
-		return 0, fmt.Errorf("name, api url and browser url are required: %w", ErrInvalidArgument)
+		return "", fmt.Errorf("name, api url and browser url are required: %w", ErrInvalidArgument)
 	}
 
-	id, err := c.Repository.StoreProjektoveOrganization(ctx, name, apiURL, browserURL)
+	_, uuid, err := c.Repository.StoreProjektoveOrganization(ctx, name, apiURL, browserURL)
 	if err != nil {
-		return 0, fmt.Errorf("when storing organization: %w", err)
+		return "", fmt.Errorf("when storing organization: %w", err)
 	}
 
-	return id, nil
+	return uuid, nil
 }
 
-func (c Controller) UpdateOrganization(ctx context.Context, id int, name, apiURL, browserURL string) error {
+func (c Controller) UpdateOrganization(ctx context.Context, uuid string, name, apiURL, browserURL string) error {
 	if strings.TrimSpace(name) == "" || strings.TrimSpace(apiURL) == "" || strings.TrimSpace(browserURL) == "" {
 		return fmt.Errorf("name, api url and browser url are required: %w", ErrInvalidArgument)
 	}
 
-	if err := c.Repository.UpdateProjektoveOrganization(ctx, id, name, apiURL, browserURL); err != nil {
+	if err := c.Repository.UpdateProjektoveOrganization(ctx, uuid, name, apiURL, browserURL); err != nil {
 		return fmt.Errorf("when updating organization: %w", err)
 	}
 
 	return nil
 }
 
-func (c Controller) AddOrganizationUser(ctx context.Context, orgID int, name string, projektoveID int) error {
+func (c Controller) AddOrganizationUser(ctx context.Context, orgUUID string, name string, projektoveID int) error {
 	if strings.TrimSpace(name) == "" || projektoveID <= 0 {
 		return fmt.Errorf("name and valid projektove_id are required: %w", ErrInvalidArgument)
 	}
 
-	if err := c.Repository.StoreOrganizationUser(ctx, orgID, name, projektoveID); err != nil {
+	org, err := c.Repository.GetProjektoveOrganizationByUUID(ctx, orgUUID)
+	if err != nil {
+		return fmt.Errorf("when getting organization: %w", err)
+	}
+
+	if err := c.Repository.StoreOrganizationUser(ctx, org.ID, name, projektoveID); err != nil {
 		return fmt.Errorf("when storing organization user: %w", err)
 	}
 
 	return nil
 }
 
-func (c Controller) RemoveOrganizationUser(ctx context.Context, orgID int, id int) error {
-	if err := c.Repository.DeleteOrganizationUser(ctx, orgID, id); err != nil {
+func (c Controller) RemoveOrganizationUser(ctx context.Context, orgUUID string, userUUID string) error {
+	org, err := c.Repository.GetProjektoveOrganizationByUUID(ctx, orgUUID)
+	if err != nil {
+		return fmt.Errorf("when getting organization: %w", err)
+	}
+
+	if err := c.Repository.DeleteOrganizationUser(ctx, org.ID, userUUID); err != nil {
 		return fmt.Errorf("when deleting organization user: %w", err)
 	}
 

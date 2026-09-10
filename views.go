@@ -196,7 +196,7 @@ type BatchView struct {
 }
 
 type AdminOrganizationView struct {
-	ID         int
+	ID         string
 	Name       string
 	APIURL     string
 	BrowserURL string

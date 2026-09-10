@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -104,7 +103,7 @@ func TestAdminCreateOrganization_AdminCreatesOrg(t *testing.T) {
 	require.Len(t, orgs, 1)
 	assert.Equal(t, "acme", orgs[0].Name)
 
-	rec = adminRequest(handler, auth, admin, http.MethodGet, "/admin/organizations/"+strconv.Itoa(orgs[0].ID), "")
+	rec = adminRequest(handler, auth, admin, http.MethodGet, "/admin/organizations/"+orgs[0].UUID, "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "acme")
 }
@@ -143,27 +142,27 @@ func TestAdminModelsPage_AdminOK(t *testing.T) {
 func TestAdminOrganizationDetail_AdminOK(t *testing.T) {
 	repo := newRepository(t)
 	handler, auth, _, admin := newAdminTestServer(t, repo)
-	orgID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	orgID, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 	require.NoError(t, repo.StoreOrganizationUser(t.Context(), orgID, "jane", 42))
 
-	rec := adminRequest(handler, auth, admin, http.MethodGet, "/admin/organizations/"+strconv.Itoa(orgID), "")
+	rec := adminRequest(handler, auth, admin, http.MethodGet, "/admin/organizations/"+orgUUID, "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Organization: acme")
 	assert.Contains(t, rec.Body.String(), "jane")
 
 	// non-admin cannot view the detail page
-	rec = adminRequest(handler, auth, admin, http.MethodGet, "/admin/organizations/"+strconv.Itoa(orgID), "")
+	rec = adminRequest(handler, auth, admin, http.MethodGet, "/admin/organizations/"+orgUUID, "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestAdminUpdateOrganization_AdminUpdates(t *testing.T) {
 	repo := newRepository(t)
 	handler, auth, _, admin := newAdminTestServer(t, repo)
-	orgID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
-	rec := adminRequest(handler, auth, admin, http.MethodPost, "/api/admin/organizations/"+strconv.Itoa(orgID), url.Values{
+	rec := adminRequest(handler, auth, admin, http.MethodPost, "/api/admin/organizations/"+orgUUID, url.Values{
 		"name":        {"acme2"},
 		"api_url":     {"https://api2.example.com"},
 		"browser_url": {"https://app2.example.com"},
@@ -171,7 +170,7 @@ func TestAdminUpdateOrganization_AdminUpdates(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "acme2")
 
-	got, err := repo.GetProjektoveOrganization(t.Context(), orgID)
+	got, err := repo.GetProjektoveOrganizationByUUID(t.Context(), orgUUID)
 	require.NoError(t, err)
 	assert.Equal(t, "acme2", got.Name)
 	assert.Equal(t, "https://api2.example.com", got.APIURL)
@@ -180,10 +179,10 @@ func TestAdminUpdateOrganization_AdminUpdates(t *testing.T) {
 func TestAdminAddOrgUser_AddsUser(t *testing.T) {
 	repo := newRepository(t)
 	handler, auth, _, admin := newAdminTestServer(t, repo)
-	orgID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	orgID, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
-	rec := adminRequest(handler, auth, admin, http.MethodPost, "/api/admin/organizations/"+strconv.Itoa(orgID)+"/users", url.Values{
+	rec := adminRequest(handler, auth, admin, http.MethodPost, "/api/admin/organizations/"+orgUUID+"/users", url.Values{
 		"name":          {"jane"},
 		"projektove_id": {"42"},
 	}.Encode())
@@ -200,7 +199,7 @@ func TestAdminAddOrgUser_AddsUser(t *testing.T) {
 func TestAdminRemoveOrgUser_RemovesUser(t *testing.T) {
 	repo := newRepository(t)
 	handler, auth, _, admin := newAdminTestServer(t, repo)
-	orgID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	orgID, orgUUID, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 	require.NoError(t, repo.StoreOrganizationUser(t.Context(), orgID, "jane", 42))
 
@@ -208,7 +207,7 @@ func TestAdminRemoveOrgUser_RemovesUser(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, users, 1)
 
-	rec := adminRequest(handler, auth, admin, http.MethodDelete, "/api/admin/organizations/"+strconv.Itoa(orgID)+"/users/"+strconv.Itoa(users[0].ID), "")
+	rec := adminRequest(handler, auth, admin, http.MethodDelete, "/api/admin/organizations/"+orgUUID+"/users/"+users[0].UUID, "")
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	users, err = repo.ListOrganizationUsers(t.Context(), orgID)
@@ -331,7 +330,7 @@ func TestUserPage_RendersModelSelect(t *testing.T) {
 func TestAddOrganization_Valid(t *testing.T) {
 	repo := newRepository(t)
 	handler, auth, user, _ := newAdminTestServer(t, repo)
-	_, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, _, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	rec := adminRequest(handler, auth, user, http.MethodPost, "/api/organizations", url.Values{
@@ -358,7 +357,7 @@ func TestAddOrganization_Unknown(t *testing.T) {
 func TestUpdateUser_SavesNewOrganization(t *testing.T) {
 	repo := newRepository(t)
 	handler, auth, user, _ := newAdminTestServer(t, repo)
-	_, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, _, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	rec := adminRequest(handler, auth, user, http.MethodPut, "/api/user", url.Values{
@@ -378,7 +377,7 @@ func TestUpdateUser_SavesNewOrganization(t *testing.T) {
 func TestUserPage_RendersOrgSelect(t *testing.T) {
 	repo := newRepository(t)
 	handler, auth, user, _ := newAdminTestServer(t, repo)
-	_, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
+	_, _, err := repo.StoreProjektoveOrganization(t.Context(), "acme", "https://api.example.com", "https://app.example.com")
 	require.NoError(t, err)
 
 	rec := adminRequest(handler, auth, user, http.MethodGet, "/user", "")

@@ -886,7 +886,7 @@ func (r *RepositorySqlite) StoreUserProjectoveOrganization(ctx context.Context, 
 func (r *RepositorySqlite) ListOrganizationUsers(ctx context.Context, orgID int) ([]ProjektoveOrganizationUser, error) {
 	users := []ProjektoveOrganizationUser{}
 
-	rows, err := r.DB.QueryContext(ctx, "SELECT id, organization_id, name, projektove_id FROM projektove_organizations_users WHERE organization_id = ? ORDER BY name", orgID)
+	rows, err := r.DB.QueryContext(ctx, "SELECT id, uuid, organization_id, name, projektove_id FROM projektove_organizations_users WHERE organization_id = ? ORDER BY name", orgID)
 	if err != nil {
 		return nil, fmt.Errorf("when listing organization users: %w", err)
 	}
@@ -894,7 +894,7 @@ func (r *RepositorySqlite) ListOrganizationUsers(ctx context.Context, orgID int)
 
 	for rows.Next() {
 		u := ProjektoveOrganizationUser{}
-		if err := rows.Scan(&u.ID, &u.OrganizationID, &u.Name, &u.ProjektoveID); err != nil {
+		if err := rows.Scan(&u.ID, &u.UUID, &u.OrganizationID, &u.Name, &u.ProjektoveID); err != nil {
 			return nil, fmt.Errorf("when scanning organization user: %w", err)
 		}
 		users = append(users, u)
@@ -910,7 +910,7 @@ func (r *RepositorySqlite) ListOrganizationUsers(ctx context.Context, orgID int)
 func (r *RepositorySqlite) ListProjektoveOrganizations(ctx context.Context) ([]ProjektoveOrganization, error) {
 	orgs := []ProjektoveOrganization{}
 
-	rows, err := r.DB.QueryContext(ctx, "SELECT id, name, api_url, browser_url FROM projektove_organizations ORDER BY name")
+	rows, err := r.DB.QueryContext(ctx, "SELECT id, uuid, name, api_url, browser_url FROM projektove_organizations ORDER BY name")
 	if err != nil {
 		return nil, fmt.Errorf("when listing projektove organizations: %w", err)
 	}
@@ -918,7 +918,7 @@ func (r *RepositorySqlite) ListProjektoveOrganizations(ctx context.Context) ([]P
 
 	for rows.Next() {
 		o := ProjektoveOrganization{}
-		if err := rows.Scan(&o.ID, &o.Name, &o.APIURL, &o.BrowserURL); err != nil {
+		if err := rows.Scan(&o.ID, &o.UUID, &o.Name, &o.APIURL, &o.BrowserURL); err != nil {
 			return nil, fmt.Errorf("when scanning organization: %w", err)
 		}
 		orgs = append(orgs, o)
@@ -931,23 +931,24 @@ func (r *RepositorySqlite) ListProjektoveOrganizations(ctx context.Context) ([]P
 	return orgs, nil
 }
 
-func (r *RepositorySqlite) StoreProjektoveOrganization(ctx context.Context, name, apiURL, browserURL string) (int, error) {
-	result, err := r.DB.ExecContext(ctx, "INSERT INTO projektove_organizations (name, api_url, browser_url) VALUES (?, ?, ?)", name, apiURL, browserURL)
+func (r *RepositorySqlite) StoreProjektoveOrganization(ctx context.Context, name, apiURL, browserURL string) (int, string, error) {
+	uuid := newUUID()
+	result, err := r.DB.ExecContext(ctx, "INSERT INTO projektove_organizations (uuid, name, api_url, browser_url) VALUES (?, ?, ?, ?)", uuid, name, apiURL, browserURL)
 	if err != nil {
-		return 0, fmt.Errorf("failed to store projektove organization: %w", err)
+		return 0, "", fmt.Errorf("failed to store projektove organization: %w", err)
 	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get last insert id: %w", err)
+		return 0, "", fmt.Errorf("failed to get last insert id: %w", err)
 	}
 
-	return int(id), nil
+	return int(id), uuid, nil
 }
 
-func (r *RepositorySqlite) GetProjektoveOrganization(ctx context.Context, id int) (ProjektoveOrganization, error) {
+func (r *RepositorySqlite) GetProjektoveOrganizationByUUID(ctx context.Context, uuid string) (ProjektoveOrganization, error) {
 	o := ProjektoveOrganization{}
-	err := r.DB.QueryRowContext(ctx, "SELECT id, name, api_url, browser_url FROM projektove_organizations WHERE id = ?", id).Scan(&o.ID, &o.Name, &o.APIURL, &o.BrowserURL)
+	err := r.DB.QueryRowContext(ctx, "SELECT id, uuid, name, api_url, browser_url FROM projektove_organizations WHERE uuid = ?", uuid).Scan(&o.ID, &o.UUID, &o.Name, &o.APIURL, &o.BrowserURL)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ProjektoveOrganization{}, ErrOrganizationNotFound
@@ -960,7 +961,7 @@ func (r *RepositorySqlite) GetProjektoveOrganization(ctx context.Context, id int
 
 func (r *RepositorySqlite) GetProjektoveOrganizationByName(ctx context.Context, name string) (ProjektoveOrganization, error) {
 	o := ProjektoveOrganization{}
-	err := r.DB.QueryRowContext(ctx, "SELECT id, name, api_url, browser_url FROM projektove_organizations WHERE name = ?", name).Scan(&o.ID, &o.Name, &o.APIURL, &o.BrowserURL)
+	err := r.DB.QueryRowContext(ctx, "SELECT id, uuid, name, api_url, browser_url FROM projektove_organizations WHERE name = ?", name).Scan(&o.ID, &o.UUID, &o.Name, &o.APIURL, &o.BrowserURL)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ProjektoveOrganization{}, ErrOrganizationNotFound
@@ -971,8 +972,8 @@ func (r *RepositorySqlite) GetProjektoveOrganizationByName(ctx context.Context, 
 	return o, nil
 }
 
-func (r *RepositorySqlite) UpdateProjektoveOrganization(ctx context.Context, id int, name, apiURL, browserURL string) error {
-	result, err := r.DB.ExecContext(ctx, "UPDATE projektove_organizations SET name = ?, api_url = ?, browser_url = ? WHERE id = ?", name, apiURL, browserURL, id)
+func (r *RepositorySqlite) UpdateProjektoveOrganization(ctx context.Context, uuid string, name, apiURL, browserURL string) error {
+	result, err := r.DB.ExecContext(ctx, "UPDATE projektove_organizations SET name = ?, api_url = ?, browser_url = ? WHERE uuid = ?", name, apiURL, browserURL, uuid)
 	if err != nil {
 		return fmt.Errorf("failed to update projektove organization: %w", err)
 	}
@@ -989,15 +990,15 @@ func (r *RepositorySqlite) UpdateProjektoveOrganization(ctx context.Context, id 
 }
 
 func (r *RepositorySqlite) StoreOrganizationUser(ctx context.Context, orgID int, name string, projektoveID int) error {
-	if _, err := r.DB.ExecContext(ctx, "INSERT INTO projektove_organizations_users (organization_id, name, projektove_id) VALUES (?, ?, ?)", orgID, name, projektoveID); err != nil {
+	if _, err := r.DB.ExecContext(ctx, "INSERT INTO projektove_organizations_users (uuid, organization_id, name, projektove_id) VALUES (?, ?, ?, ?)", newUUID(), orgID, name, projektoveID); err != nil {
 		return fmt.Errorf("failed to store organization user: %w", err)
 	}
 
 	return nil
 }
 
-func (r *RepositorySqlite) DeleteOrganizationUser(ctx context.Context, orgID int, id int) error {
-	result, err := r.DB.ExecContext(ctx, "DELETE FROM projektove_organizations_users WHERE id = ? AND organization_id = ?", id, orgID)
+func (r *RepositorySqlite) DeleteOrganizationUser(ctx context.Context, orgID int, uuid string) error {
+	result, err := r.DB.ExecContext(ctx, "DELETE FROM projektove_organizations_users WHERE uuid = ? AND organization_id = ?", uuid, orgID)
 	if err != nil {
 		return fmt.Errorf("failed to delete organization user: %w", err)
 	}
