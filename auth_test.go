@@ -203,8 +203,7 @@ func TestAuthenticate_AutoProvision(t *testing.T) {
 
 	stored, err := repo.GetUser(t.Context(), newEmail)
 	require.NoError(t, err)
-	assert.Equal(t, "", stored.ProjektoveToken)
-	assert.Empty(t, stored.LLMModels)
+	assert.Equal(t, newEmail, stored.Email)
 }
 
 func TestAuthenticate_InvalidToken(t *testing.T) {

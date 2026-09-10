@@ -38,75 +38,48 @@ func (t *countingTransport) count() int {
 	return t.requests
 }
 
-func newProjektoveAPI(tr *countingTransport, db Repository) Projektove {
+func newProjektoveAPI(tr *countingTransport) Projektove {
 	if tr.status == 0 {
 		tr.status = http.StatusOK
 	}
-	api, err := NewProjektoveAPI("http://example.test", NewClient(WithHTTPClient(&http.Client{Transport: tr})), db)
+	api, err := NewProjektoveAPI(NewClient(WithHTTPClient(&http.Client{Transport: tr})))
 	if err != nil {
 		panic(err)
 	}
 	return api
 }
 
+const testProjektoveBaseURL = "http://example.test"
+
 func TestProjektoveGetProjects_TokenMissing(t *testing.T) {
 	tr := &countingTransport{}
-	api := newProjektoveAPI(tr, nil)
+	api := newProjektoveAPI(tr)
 
-	projects, err := api.GetProjects(t.Context(), User{Email: "u@example.com"})
+	projects, err := api.GetProjects(t.Context(), "   ", testProjektoveBaseURL)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrProjektoveTokenNotConfigured))
 	assert.Nil(t, projects)
 	assert.Zero(t, tr.count())
 }
 
-func TestProjektoveGetProjects_WhitespaceTokenMissing(t *testing.T) {
-	tr := &countingTransport{}
-	api := newProjektoveAPI(tr, nil)
-
-	_, err := api.GetProjects(t.Context(), User{Email: "u@example.com", ProjektoveToken: "   "})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrProjektoveTokenNotConfigured))
-	assert.Zero(t, tr.count())
-}
-
 func TestProjektoveCreateIssue_TokenMissing(t *testing.T) {
 	tr := &countingTransport{}
-	api := newProjektoveAPI(tr, nil)
+	api := newProjektoveAPI(tr)
 
-	_, err := api.CreateIssue(t.Context(), User{Email: "u@example.com"}, ProjektoveIssueCreate{Subject: "s"})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrProjektoveTokenNotConfigured))
-	assert.Zero(t, tr.count())
-}
-
-func TestProjektoveGetProjects_TokenMissing_IgnoresCache(t *testing.T) {
-	repo := newRepository(t)
-	user := storeUser(t, repo, "u@example.com")
-
-	require.NoError(t, repo.UpdateProjectsCache(t.Context(), user, []ProjektoveProject{{ID: 1, Name: "p1", Description: "d1"}}))
-
-	tr := &countingTransport{}
-	api := newProjektoveAPI(tr, repo)
-
-	_, err := api.GetProjects(t.Context(), User{Email: "u@example.com"})
+	_, err := api.CreateIssue(t.Context(), "   ", testProjektoveBaseURL, ProjektoveIssueCreate{Subject: "s"})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrProjektoveTokenNotConfigured))
 	assert.Zero(t, tr.count())
 }
 
 func TestProjektoveGetProjects_WithToken(t *testing.T) {
-	repo := newRepository(t)
-	user := storeUser(t, repo, "u@example.com")
-	require.NoError(t, repo.UpdateUser(t.Context(), user, UserUpdate{ProjektoveToken: "secret"}))
-
 	tr := &countingTransport{
 		status: http.StatusOK,
 		body:   `{"projects":[{"id":1,"name":"p1","description":"d1"},{"id":2,"name":"p2","description":"d2"}]}`,
 	}
-	api := newProjektoveAPI(tr, repo)
+	api := newProjektoveAPI(tr)
 
-	projects, err := api.GetProjects(t.Context(), User{Email: "u@example.com", ProjektoveToken: "secret"})
+	projects, err := api.GetProjects(t.Context(), "secret", testProjektoveBaseURL)
 	require.NoError(t, err)
 	require.Len(t, projects, 2)
 	assert.Equal(t, 1, projects[0].ID)
@@ -119,9 +92,9 @@ func TestProjektoveCreateIssue_WithToken(t *testing.T) {
 		status: http.StatusCreated,
 		body:   `{"issue":{"id":7,"subject":"s"}}`,
 	}
-	api := newProjektoveAPI(tr, nil)
+	api := newProjektoveAPI(tr)
 
-	issue, err := api.CreateIssue(t.Context(), User{ProjektoveToken: "secret"}, ProjektoveIssueCreate{Subject: "s", ProjectID: 1})
+	issue, err := api.CreateIssue(t.Context(), "secret", testProjektoveBaseURL, ProjektoveIssueCreate{Subject: "s", ProjectID: 1})
 	require.NoError(t, err)
 	assert.Equal(t, 7, issue.ID)
 	assert.Equal(t, 1, tr.count())

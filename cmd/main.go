@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"time"
 
 	projektovemeeting "github.com/tsladecek/projektove_meeting"
@@ -45,20 +46,28 @@ func run() error {
 		return fmt.Errorf("when constructing data repository adapter: %w", err)
 	}
 
-	projektove, err := projektovemeeting.NewProjektoveAPI(config.Projektove.URL, client, repo)
+	projektove, err := projektovemeeting.NewProjektoveAPI(client)
 	if err != nil {
 		return fmt.Errorf("when constructing projektove adapter: %w", err)
 	}
 
-	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, NewLLMProvider: projektovemeeting.NewLLM, Users: config.Projektove.Users, TxProvider: txp}
+	controller := projektovemeeting.Controller{Repository: repo, Projektove: projektove, NewLLMProvider: projektovemeeting.NewLLM, TxProvider: txp}
 
 	if config.Auth.DefaultUser != "" {
-		hash, err := projektovemeeting.HashPassword(config.Auth.DefaultPassword)
+		_, err := repo.GetUser(context.Background(), config.Auth.DefaultUser)
 		if err != nil {
-			return fmt.Errorf("when hashing default user password: %w", err)
-		}
-		if err := repo.UpsertDefaultUser(context.Background(), config.Auth.DefaultUser, hash); err != nil {
-			return fmt.Errorf("when bootstrapping default user: %w", err)
+			hash, err := projektovemeeting.HashPassword(config.Auth.DefaultPassword)
+			if err != nil {
+				return fmt.Errorf("when hashing default user password: %w", err)
+			}
+			obj := projektovemeeting.UserCreate{
+				Email:        config.Auth.DefaultUser,
+				PasswordHash: new(hash),
+				IsAdmin:      true,
+			}
+			if _, err := repo.StoreUser(context.Background(), obj); err != nil {
+				return fmt.Errorf("when bootstrapping default user: %w", err)
+			}
 		}
 	}
 
@@ -84,17 +93,36 @@ func run() error {
 		return fmt.Errorf("when constructing auth adapter: %w", err)
 	}
 
-	handler := projektovemeeting.NewHandler(auth, "/", controller, config.Projektove.IssueEndpoint, endpointLogout)
+	handler := projektovemeeting.NewHandler(auth, baseURL, controller, endpointLogout)
 
-	server := http.Server{Addr: fmt.Sprintf(":%d", config.Port), Handler: handler}
+	port := 80
+
+	if config.TLS.CertPath != "" {
+		port = 443
+	}
+
+	if baseURL.Port() != "" {
+		port, err = strconv.Atoi(baseURL.Port())
+		if err != nil {
+			return fmt.Errorf("when parsing port from baseURL %q: %w", baseURL.String(), err)
+		}
+	}
+
+	server := http.Server{Addr: fmt.Sprintf(":%d", port), Handler: handler}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	go func() {
-		slog.Info("Starting server...", slog.Int("port", config.Port))
-		if err := server.ListenAndServe(); err != nil {
-			slog.Error(err.Error())
+		slog.Info("Starting server...", slog.Int("port", port))
+		if config.TLS.CertPath != "" {
+			if err := server.ListenAndServeTLS(config.TLS.CertPath, config.TLS.KeyPath); err != nil {
+				slog.Error(err.Error())
+			}
+		} else {
+			if err := server.ListenAndServe(); err != nil {
+				slog.Error(err.Error())
+			}
 		}
 	}()
 

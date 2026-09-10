@@ -1,8 +1,14 @@
+DROP INDEX IF EXISTS idx_projects_org;
 DROP TABLE IF EXISTS issues;
 DROP TABLE IF EXISTS issue_batches;
 DROP TABLE IF EXISTS projects;
 DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS prompts;
 DROP TABLE IF EXISTS contexts;
+DROP TABLE IF EXISTS users_models;
+DROP TABLE IF EXISTS projektove_organizations_users;
+DROP TABLE IF EXISTS users_projektove_organizations;
+DROP TABLE IF EXISTS projektove_organizations;
+DROP TABLE IF EXISTS models;
 DROP TABLE IF EXISTS providers;
 DROP TABLE IF EXISTS users;

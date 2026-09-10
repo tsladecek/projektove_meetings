@@ -44,11 +44,18 @@ type endpoints struct {
 	newBatch  Endpoint
 	batch     Endpoint
 
+	// admin pages
+	adminOrganizations   Endpoint
+	adminNewOrganization Endpoint
+	adminOrganization    Endpoint
+	adminModels          Endpoint
+
 	// api - should have /api prefix
-	updateUser    Endpoint
-	addContext    Endpoint
-	deleteContext Endpoint
-	addLLMModel   Endpoint
+	updateUser      Endpoint
+	addContext      Endpoint
+	deleteContext   Endpoint
+	addLLMModel     Endpoint
+	addOrganization Endpoint
 
 	listContexts Endpoint
 	createPrompt Endpoint
@@ -56,30 +63,32 @@ type endpoints struct {
 
 	updateIssue Endpoint
 	submitIssue Endpoint
-	deleteIssue Endpoint
+	ignoreIssue Endpoint
+
+	// admin api - /api/admin prefix
+	adminCreateOrganization Endpoint
+	adminUpdateOrganization Endpoint
+	adminAddOrgUser         Endpoint
+	adminRemoveOrgUser      Endpoint
+	adminCreateProvider     Endpoint
+	adminCreateModel        Endpoint
 }
 
 type components struct {
-	endpoints               endpoints
-	projektoveIssueEndpoint string
+	endpoints endpoints
 
 	endpointLogout Endpoint
 }
 
-func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssueEndpoint string, logoutEndpoint Endpoint) http.Handler {
+func NewHandler(auth Auth, baseURL *url.URL, controller Controller, logoutEndpoint Endpoint) http.Handler {
 	m := http.NewServeMux()
 
-	burl, err := url.Parse(baseURL)
-	if err != nil {
-		panic(err)
-	}
-
 	end := func(method, endpoint string) Endpoint {
-		return NewEndpoint(method, burl.Path, endpoint)
+		return NewEndpoint(method, baseURL.Path, endpoint)
 	}
 
 	endAPI := func(method, endpoint string) Endpoint {
-		return NewEndpoint(method, path.Join(burl.Path, "/api"), endpoint)
+		return NewEndpoint(method, path.Join(baseURL.Path, "/api"), endpoint)
 	}
 
 	e := endpoints{
@@ -95,12 +104,19 @@ func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssu
 		newBatch:  end(http.MethodGet, "/batches/new"),
 		batch:     end(http.MethodGet, "/batches/{id}"),
 
+		// admin pages
+		adminOrganizations:   end(http.MethodGet, "/admin/organizations"),
+		adminNewOrganization: end(http.MethodGet, "/admin/organizations/new"),
+		adminOrganization:    end(http.MethodGet, "/admin/organizations/{id}"),
+		adminModels:          end(http.MethodGet, "/admin/models"),
+
 		// api
 
-		updateUser:    endAPI(http.MethodPut, "/user"),
-		addContext:    endAPI(http.MethodPost, "/contexts"),
-		addLLMModel:   endAPI(http.MethodPost, "/models"),
-		deleteContext: endAPI(http.MethodDelete, "/contexts/{id}"),
+		updateUser:      endAPI(http.MethodPut, "/user"),
+		addContext:      endAPI(http.MethodPost, "/contexts"),
+		addLLMModel:     endAPI(http.MethodPost, "/models"),
+		addOrganization: endAPI(http.MethodPost, "/organizations"),
+		deleteContext:   endAPI(http.MethodDelete, "/contexts/{id}"),
 
 		listContexts: endAPI(http.MethodGet, "/contexts"),
 		createPrompt: endAPI(http.MethodPost, "/prompts"),
@@ -108,11 +124,19 @@ func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssu
 
 		updateIssue: endAPI(http.MethodPut, "/issues/{id}"),
 		submitIssue: endAPI(http.MethodPost, "/issues/{id}/submit"),
-		deleteIssue: endAPI(http.MethodDelete, "/issues/{id}"),
+		ignoreIssue: endAPI(http.MethodPut, "/issues/{id}/ignore"),
+
+		// admin api
+		adminCreateOrganization: endAPI(http.MethodPost, "/admin/organizations"),
+		adminUpdateOrganization: endAPI(http.MethodPut, "/admin/organizations/{id}"),
+		adminAddOrgUser:         endAPI(http.MethodPost, "/admin/organizations/{id}/users"),
+		adminRemoveOrgUser:      endAPI(http.MethodDelete, "/admin/organizations/{id}/users/{uid}"),
+		adminCreateProvider:     endAPI(http.MethodPost, "/admin/providers"),
+		adminCreateModel:        endAPI(http.MethodPost, "/admin/models"),
 	}
 
-	c := components{endpoints: e, projektoveIssueEndpoint: projektoveIssueEndpoint, endpointLogout: logoutEndpoint}
-	a := api{controller: controller, basePath: burl.Path, components: c}
+	c := components{endpoints: e, endpointLogout: logoutEndpoint}
+	a := api{controller: controller, basePath: baseURL.Path, components: c}
 
 	type endpointHandler struct {
 		endpoint Endpoint
@@ -138,14 +162,34 @@ func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssu
 		{endpoint: e.addContext, handler: a.addContext()},
 		{endpoint: e.deleteContext, handler: a.deleteContext()},
 		{endpoint: e.addLLMModel, handler: a.addLLMModel()},
+		{endpoint: e.addOrganization, handler: a.addOrganization()},
 		{endpoint: e.listContexts, handler: a.listContexts()},
 		{endpoint: e.createPrompt, handler: a.createPrompt()},
 		{endpoint: e.createBatch, handler: a.createBatch()},
 		{endpoint: e.updateIssue, handler: a.updateIssue()},
 		{endpoint: e.submitIssue, handler: a.submitIssue()},
-		{endpoint: e.deleteIssue, handler: a.deleteIssue()},
+		{endpoint: e.ignoreIssue, handler: a.ignoreIssue()},
 	} {
 		m.Handle(eh.endpoint.Pattern(), auth.Middleware(eh.handler))
+	}
+
+	// admin routes require an admin user
+	for _, eh := range []endpointHandler{
+		// admin pages
+		{endpoint: e.adminOrganizations, handler: a.adminOrganizations()},
+		{endpoint: e.adminNewOrganization, handler: a.adminNewOrganization()},
+		{endpoint: e.adminOrganization, handler: a.adminOrganization()},
+		{endpoint: e.adminModels, handler: a.adminModels()},
+
+		// admin api
+		{endpoint: e.adminCreateOrganization, handler: a.adminCreateOrganization()},
+		{endpoint: e.adminUpdateOrganization, handler: a.adminUpdateOrganization()},
+		{endpoint: e.adminAddOrgUser, handler: a.adminAddOrgUser()},
+		{endpoint: e.adminRemoveOrgUser, handler: a.adminRemoveOrgUser()},
+		{endpoint: e.adminCreateProvider, handler: a.adminCreateProvider()},
+		{endpoint: e.adminCreateModel, handler: a.adminCreateModel()},
+	} {
+		m.Handle(eh.endpoint.Pattern(), auth.Middleware(requireAdmin(eh.handler)))
 	}
 
 	auth.RegisterRoutes(m)
@@ -154,9 +198,20 @@ func NewHandler(auth Auth, baseURL string, controller Controller, projektoveIssu
 	return handler
 }
 
+func requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok || !user.IsAdmin {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (a api) root() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.components.Page(a.components.RootPage()).Render(w)
+		a.page(w, r, a.components.RootPage())
 	}
 }
 
@@ -190,7 +245,7 @@ func (a api) user() http.HandlerFunc {
 			return
 		}
 
-		a.components.Page(a.components.UserPage(profile)).Render(w)
+		a.page(w, r, a.components.UserPage(profile))
 	}
 }
 
@@ -224,7 +279,7 @@ func (a api) prompts() http.HandlerFunc {
 			a.components.PromptsBatch(view).Render(w)
 			return
 		}
-		a.components.Page(a.components.PromptsPage(view)).Render(w)
+		a.page(w, r, a.components.PromptsPage(view))
 	}
 }
 
@@ -242,7 +297,19 @@ func (a api) newPrompt() http.HandlerFunc {
 			return
 		}
 
-		a.components.Page(a.components.NewPromptPage(contexts, user.LLMModels, nil)).Render(w)
+		models, err := a.controller.Repository.ListUserModels(r.Context(), user.ID)
+		if err != nil {
+			WriteError(w, "failed to load models", http.StatusInternalServerError, err)
+			return
+		}
+
+		orgs, err := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+		if err != nil {
+			WriteError(w, "failed to load organizations", http.StatusInternalServerError, err)
+			return
+		}
+
+		a.page(w, r, a.components.NewPromptPage(contexts, models, orgs, nil))
 	}
 }
 
@@ -266,17 +333,28 @@ func (a api) prompt() http.HandlerFunc {
 			return
 		}
 
-		projects, err := a.controller.ListProjects(r.Context(), user)
+		org, err := a.resolveUserOrg(r.Context(), user, view.OrgID)
+		if err != nil {
+			WriteError(w, "failed to resolve organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		projects, err := a.controller.ListProjects(r.Context(), org)
 		if err != nil {
 			projects = []ProjectOptionView{}
 		}
 
-		fragment := a.components.PromptFragment(view, projects, a.controller.Users)
+		orgUsers, err := a.controller.ListOrgUsers(r.Context(), org)
+		if err != nil {
+			orgUsers = []ProjektoveUser{}
+		}
+
+		fragment := a.components.PromptFragment(view, projects, orgUsers, org.BrowserURL)
 		if r.Header.Get("HX-Request") != "" {
 			fragment.Render(w)
 			return
 		}
-		a.components.Page(fragment).Render(w)
+		a.page(w, r, fragment)
 	}
 }
 
@@ -308,13 +386,25 @@ func (a api) batches() http.HandlerFunc {
 			a.components.BatchesList(view).Render(w)
 			return
 		}
-		a.components.Page(a.components.BatchesPage(view)).Render(w)
+		a.page(w, r, a.components.BatchesPage(view))
 	}
 }
 
 func (a api) newBatch() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		a.components.Page(a.components.NewBatchPage(nil)).Render(w)
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		orgs, err := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+		if err != nil {
+			WriteError(w, "failed to load organizations", http.StatusInternalServerError, err)
+			return
+		}
+
+		a.page(w, r, a.components.NewBatchPage(orgs, nil))
 	}
 }
 
@@ -338,17 +428,256 @@ func (a api) batch() http.HandlerFunc {
 			return
 		}
 
-		projects, err := a.controller.ListProjects(r.Context(), user)
+		org, err := a.resolveUserOrg(r.Context(), user, view.OrgID)
+		if err != nil {
+			WriteError(w, "failed to resolve organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		projects, err := a.controller.ListProjects(r.Context(), org)
 		if err != nil {
 			projects = []ProjectOptionView{}
 		}
 
-		fragment := a.components.BatchFragment(view, projects, a.controller.Users)
+		orgUsers, err := a.controller.ListOrgUsers(r.Context(), org)
+		if err != nil {
+			orgUsers = []ProjektoveUser{}
+		}
+
+		fragment := a.components.BatchFragment(view, projects, orgUsers, org.BrowserURL)
 		if r.Header.Get("HX-Request") != "" {
 			fragment.Render(w)
 			return
 		}
-		a.components.Page(fragment).Render(w)
+		a.page(w, r, fragment)
+	}
+}
+
+// admin pages
+
+func (a api) adminOrganizations() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgs, err := a.controller.ListAdminOrganizations(r.Context())
+		if err != nil {
+			WriteError(w, "failed to load organizations", http.StatusInternalServerError, err)
+			return
+		}
+		a.page(w, r, a.components.AdminOrganizationsPage(orgs))
+	}
+}
+
+func (a api) adminNewOrganization() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		a.page(w, r, a.components.AdminNewOrganizationPage(nil))
+	}
+}
+
+func (a api) adminOrganization() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		view, err := a.controller.GetAdminOrganization(r.Context(), r.PathValue("id"))
+		if err != nil {
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "organization not found", http.StatusNotFound, nil)
+				return
+			}
+			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		a.page(w, r, a.components.AdminOrganizationPage(view))
+	}
+}
+
+func (a api) adminModels() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		providers, models, err := a.controller.ListAdminModels(r.Context())
+		if err != nil {
+			WriteError(w, "failed to load models", http.StatusInternalServerError, err)
+			return
+		}
+		a.page(w, r, a.components.AdminModelsPage(providers, models, nil))
+	}
+}
+
+// admin api
+
+func (a api) adminCreateOrganization() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		orgUUID, err := a.controller.CreateOrganization(r.Context(), r.Form.Get("name"), r.Form.Get("api_url"), r.Form.Get("browser_url"))
+		if err != nil {
+			if errors.Is(err, ErrOrganizationExists) {
+				WriteError(w, fmt.Sprintf("Organization %s already exists", r.Form.Get("name")), http.StatusBadRequest, nil)
+				return
+			}
+			if errors.Is(err, ErrInvalidArgument) {
+				a.page(w, r, a.components.AdminNewOrganizationPage([]string{"All fields are required"}))
+				return
+			}
+			WriteError(w, "failed to create organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		redirectPath := strings.Replace(a.components.endpoints.adminOrganization.Path(), "{id}", orgUUID, 1)
+		w.Header().Add("HX-Location", redirectPath)
+	}
+}
+
+func (a api) adminUpdateOrganization() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgUUID := r.PathValue("id")
+
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		err := a.controller.UpdateOrganization(r.Context(), orgUUID, r.Form.Get("api_url"), r.Form.Get("browser_url"))
+		if err != nil {
+			if errors.Is(err, ErrOrganizationExists) {
+				WriteError(w, fmt.Sprintf("Organization %s already exists", r.Form.Get("name")), http.StatusBadRequest, nil)
+				return
+			}
+			if errors.Is(err, ErrInvalidArgument) {
+				w.Header().Set("X-Error", "All fields are required")
+				view, _ := a.controller.GetAdminOrganization(r.Context(), orgUUID)
+				a.components.AdminOrgDetailsForm(view, nil).Render(w)
+				return
+			}
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "organization not found", http.StatusNotFound, nil)
+				return
+			}
+			WriteError(w, "failed to update organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		withSuccessToast(w)
+		view, err := a.controller.GetAdminOrganization(r.Context(), orgUUID)
+		if err != nil {
+			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.AdminOrgDetailsForm(view, nil).Render(w)
+	}
+}
+
+func (a api) adminAddOrgUser() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgUUID := r.PathValue("id")
+
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		projektoveID, _ := strconv.Atoi(r.Form.Get("projektove_id"))
+		if err := a.controller.AddOrganizationUser(r.Context(), orgUUID, r.Form.Get("name"), projektoveID); err != nil {
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "organization not found", http.StatusNotFound, nil)
+				return
+			}
+			if errors.Is(err, ErrInvalidArgument) {
+				w.Header().Set("X-Error", "Name and Projektove ID are required")
+				view, _ := a.controller.GetAdminOrganization(r.Context(), orgUUID)
+				a.components.AdminOrgUsersList(view.Users, orgUUID).Render(w)
+				return
+			}
+			WriteError(w, "failed to add organization user", http.StatusInternalServerError, err)
+			return
+		}
+
+		withSuccessToast(w)
+		view, err := a.controller.GetAdminOrganization(r.Context(), orgUUID)
+		if err != nil {
+			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.AdminOrgUsersList(view.Users, orgUUID).Render(w)
+	}
+}
+
+func (a api) adminRemoveOrgUser() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orgUUID := r.PathValue("id")
+		userUUID := r.PathValue("uid")
+
+		if err := a.controller.RemoveOrganizationUser(r.Context(), orgUUID, userUUID); err != nil {
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "organization user not found", http.StatusNotFound, nil)
+				return
+			}
+			WriteError(w, "failed to remove organization user", http.StatusInternalServerError, err)
+			return
+		}
+
+		withSuccessToast(w)
+		view, err := a.controller.GetAdminOrganization(r.Context(), orgUUID)
+		if err != nil {
+			WriteError(w, "failed to load organization", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.AdminOrgUsersList(view.Users, orgUUID).Render(w)
+	}
+}
+
+func (a api) adminCreateProvider() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		if err := a.controller.CreateProvider(r.Context(), r.Form.Get("provider")); err != nil {
+			if errors.Is(err, ErrProviderExists) {
+				w.Header().Set("X-Error", "Provider already exists")
+			} else if errors.Is(err, ErrInvalidArgument) {
+				w.Header().Set("X-Error", "Provider is required")
+			} else {
+				WriteError(w, "failed to create provider", http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			withSuccessToast(w)
+		}
+
+		providers, models, err := a.controller.ListAdminModels(r.Context())
+		if err != nil {
+			WriteError(w, "failed to load models", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.AdminModelsContent(providers, models).Render(w)
+	}
+}
+
+func (a api) adminCreateModel() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		if err := a.controller.CreateModel(r.Context(), r.Form.Get("provider"), r.Form.Get("model")); err != nil {
+			if errors.Is(err, ErrInvalidArgument) {
+				w.Header().Set("X-Error", "Provider and model are required")
+			} else {
+				WriteError(w, "failed to create model", http.StatusInternalServerError, err)
+				return
+			}
+		} else {
+			withSuccessToast(w)
+		}
+
+		providers, models, err := a.controller.ListAdminModels(r.Context())
+		if err != nil {
+			WriteError(w, "failed to load models", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.AdminModelsList(providers, models).Render(w)
 	}
 }
 
@@ -368,27 +697,48 @@ func (a api) updateUser() http.HandlerFunc {
 		}
 
 		v := UserUpdateView{
-			ProjektoveToken: r.Form.Get("projektove_token"),
-			Models:          []LLMModelView{},
+			Models:        []UserModelView{},
+			Organizations: []UserOrgTokenView{},
 		}
 
+		uuids := r.Form["model_uuid"]
 		providers := r.Form["model_provider"]
 		names := r.Form["model_name"]
 		tokens := r.Form["model_token"]
 		for i := range providers {
 			name := ""
 			token := ""
+			uuid := ""
 			if i < len(names) {
 				name = names[i]
 			}
 			if i < len(tokens) {
 				token = tokens[i]
 			}
-			v.Models = append(v.Models, LLMModelView{
-				Provider: LLMProvider(providers[i]),
+			if i < len(uuids) {
+				uuid = uuids[i]
+			}
+			v.Models = append(v.Models, UserModelView{
+				ID:       uuid,
+				Provider: providers[i],
 				Model:    name,
 				Token:    token,
 			})
+		}
+
+		orgUUIDs := r.Form["org_uuid"]
+		orgNames := r.Form["org_name"]
+		orgTokens := r.Form["org_token"]
+		for i := range orgUUIDs {
+			token := ""
+			name := ""
+			if i < len(orgTokens) {
+				token = orgTokens[i]
+			}
+			if i < len(orgNames) {
+				name = orgNames[i]
+			}
+			v.Organizations = append(v.Organizations, UserOrgTokenView{ID: orgUUIDs[i], OrganizationName: name, Token: token})
 		}
 
 		if err := a.controller.UpdateUser(r.Context(), user, v); err != nil {
@@ -397,6 +747,13 @@ func (a api) updateUser() http.HandlerFunc {
 		}
 
 		withSuccessToast(w)
+
+		profile, err := a.controller.GetUserProfile(r.Context(), user)
+		if err != nil {
+			WriteError(w, "failed to reload user", http.StatusInternalServerError, err)
+			return
+		}
+		a.components.userAddForms(profile).Render(w)
 	}
 }
 
@@ -457,12 +814,46 @@ func (a api) addLLMModel() http.HandlerFunc {
 			return
 		}
 
-		m := LLMModelView{
-			Provider: LLMProvider(r.Form.Get("provider")),
-			Model:    r.Form.Get("model"),
+		parts := strings.SplitN(r.Form.Get("model"), "/", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			WriteError(w, "invalid model selection", http.StatusBadRequest, nil)
+			return
+		}
+
+		m := UserModelView{
+			Provider: parts[0],
+			Model:    parts[1],
 			Token:    r.Form.Get("token"),
 		}
 		a.components.ModelRow(m).Render(w)
+	}
+}
+
+func (a api) addOrganization() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, "invalid form", http.StatusBadRequest, err)
+			return
+		}
+
+		orgName := r.Form.Get("organization")
+		if strings.TrimSpace(orgName) == "" {
+			WriteError(w, "invalid organization selection", http.StatusBadRequest, nil)
+			return
+		}
+
+		org, err := a.controller.ResolveProjectoveOrganization(r.Context(), orgName)
+		if err != nil {
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "invalid organization selection", http.StatusBadRequest, err)
+				return
+			}
+			WriteError(w, "failed to resolve organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		o := UserOrgView{Name: org.Name, Token: r.Form.Get("token")}
+		a.components.OrgRow(o).Render(w)
 	}
 }
 
@@ -493,13 +884,12 @@ func (a api) createPrompt() http.HandlerFunc {
 			return
 		}
 
-		model := r.Form.Get("model")
-		parts := strings.SplitN(model, "|", 2)
-		if len(parts) != 2 {
-			WriteError(w, "invalid model", http.StatusBadRequest, nil)
+		modelUUID := r.Form.Get("model")
+		orgUUID := r.Form.Get("organization")
+		if modelUUID == "" || orgUUID == "" {
+			WriteError(w, "invalid model or organization", http.StatusBadRequest, nil)
 			return
 		}
-		provider, name := parts[0], parts[1]
 
 		file, _, err := r.FormFile("meeting")
 		if err != nil {
@@ -514,7 +904,7 @@ func (a api) createPrompt() http.HandlerFunc {
 			return
 		}
 
-		promptUUID, err := a.controller.CreatePrompt(r.Context(), user, provider, name, context.ID, string(meeting))
+		promptUUID, err := a.controller.CreatePrompt(r.Context(), user, modelUUID, orgUUID, context.ID, r.Form.Get("prompt_context"), string(meeting))
 		if err != nil {
 			if errors.Is(err, ErrProjektoveTokenNotConfigured) {
 				contexts, ctxErr := a.controller.ListContexts(r.Context(), user)
@@ -522,12 +912,22 @@ func (a api) createPrompt() http.HandlerFunc {
 					WriteError(w, "failed to load contexts", http.StatusInternalServerError, ctxErr)
 					return
 				}
-				a.components.Page(a.components.NewPromptPage(contexts, user.LLMModels, []string{
-					"Your Projektove token is not configured. Set it on the User page before creating a prompt.",
-				})).Render(w)
+				models, mErr := a.controller.Repository.ListUserModels(r.Context(), user.ID)
+				if mErr != nil {
+					WriteError(w, "failed to load models", http.StatusInternalServerError, mErr)
+					return
+				}
+				orgs, oErr := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+				if oErr != nil {
+					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
+					return
+				}
+				a.page(w, r, a.components.NewPromptPage(contexts, models, orgs, []string{
+					"The Projektove organization token is not configured. Set it on the User page before creating a prompt.",
+				}))
 				return
 			}
-			if errors.Is(err, ErrModelNotFound) {
+			if errors.Is(err, ErrUserModelNotFound) {
 				WriteError(w, "llm model not found", http.StatusNotFound, err)
 				return
 			}
@@ -553,6 +953,12 @@ func (a api) createBatch() http.HandlerFunc {
 			return
 		}
 
+		orgUUID := r.Form.Get("organization")
+		if orgUUID == "" {
+			WriteError(w, "invalid organization", http.StatusBadRequest, nil)
+			return
+		}
+
 		file, _, err := r.FormFile("csv")
 		if err != nil {
 			WriteError(w, "invalid csv file", http.StatusBadRequest, err)
@@ -566,18 +972,28 @@ func (a api) createBatch() http.HandlerFunc {
 			return
 		}
 
-		batchUUID, err := a.controller.CreateBatch(r.Context(), user, string(raw))
+		batchUUID, err := a.controller.CreateBatch(r.Context(), user, orgUUID, string(raw))
 		if err != nil {
 			if errors.Is(err, ErrProjektoveTokenNotConfigured) {
-				a.components.Page(a.components.NewBatchPage([]string{
-					"Your Projektove token is not configured. Set it on the User page before uploading a batch.",
-				})).Render(w)
+				orgs, oErr := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+				if oErr != nil {
+					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
+					return
+				}
+				a.page(w, r, a.components.NewBatchPage(orgs, []string{
+					"The Projektove organization token is not configured. Set it on the User page before uploading a batch.",
+				}))
 				return
 			}
 
 			var csvErr *BatchCSVError
 			if errors.As(err, &csvErr) {
-				a.components.Page(a.components.NewBatchPage(csvErr.Messages)).Render(w)
+				orgs, oErr := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+				if oErr != nil {
+					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
+					return
+				}
+				a.page(w, r, a.components.NewBatchPage(orgs, csvErr.Messages))
 				return
 			}
 			WriteError(w, "failed to create batch", http.StatusInternalServerError, err)
@@ -612,15 +1028,37 @@ func parseIssueFields(r *http.Request) IssueUpdateView {
 	}
 }
 
-func (a api) renderIssueCard(ctx context.Context, w http.ResponseWriter, user User, issueUUID string, projects []ProjectOptionView, errMsg string) {
+func (a api) resolveUserOrg(ctx context.Context, user User, uuid string) (UserProjektoveOrganization, error) {
+	orgs, err := a.controller.Repository.ListUserProjektoveOrganizations(ctx, user.ID)
+	if err != nil {
+		return UserProjektoveOrganization{}, err
+	}
+	for _, o := range orgs {
+		if o.UUID == uuid {
+			return o, nil
+		}
+	}
+	return UserProjektoveOrganization{}, ErrOrganizationNotFound
+}
+
+func (a api) renderIssueCard(ctx context.Context, w http.ResponseWriter, user User, org UserProjektoveOrganization, issueUUID string, projects []ProjectOptionView, errMsg string) {
 	iss, err := a.controller.GetIssueViewByUUID(ctx, user, issueUUID)
 	if err != nil {
 		WriteError(w, "issue not found", http.StatusNotFound, nil)
 		return
 	}
 
+	orgUsers, err := a.controller.ListOrgUsers(ctx, org)
+	if err != nil {
+		orgUsers = []ProjektoveUser{}
+	}
+
 	iss.Error = errMsg
-	a.components.IssueCard(iss, projects, a.controller.Users).Render(w)
+	a.components.IssueCard(iss, projects, orgUsers, org.BrowserURL).Render(w)
+}
+
+func (a api) issueOrg(ctx context.Context, user User, issueUUID string) (UserProjektoveOrganization, error) {
+	return a.controller.GetIssueOrg(ctx, user, issueUUID)
 }
 
 func (a api) updateIssue() http.HandlerFunc {
@@ -637,29 +1075,32 @@ func (a api) updateIssue() http.HandlerFunc {
 		}
 
 		issueUUID := r.PathValue("id")
+		org, err := a.issueOrg(r.Context(), user, issueUUID)
+		if err != nil {
+			WriteError(w, "issue not found", http.StatusNotFound, nil)
+			return
+		}
+		projects, _ := a.controller.ListProjects(r.Context(), org)
 
 		v := parseIssueFields(r)
 
 		if err := a.controller.UpdateIssue(r.Context(), user, issueUUID, v); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
-				projects, _ := a.controller.ListProjects(r.Context(), user)
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			default:
-				projects, _ := a.controller.ListProjects(r.Context(), user)
 				w.Header().Set("X-Error", "Failed to update issue")
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Failed to update issue")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "Failed to update issue")
 				return
 			}
 		}
 
 		withSuccessToast(w)
-		projects, _ := a.controller.ListProjects(r.Context(), user)
-		a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+		a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 	}
 }
 
@@ -677,21 +1118,26 @@ func (a api) submitIssue() http.HandlerFunc {
 		}
 
 		issueUUID := r.PathValue("id")
+		org, err := a.issueOrg(r.Context(), user, issueUUID)
+		if err != nil {
+			WriteError(w, "issue not found", http.StatusNotFound, nil)
+			return
+		}
+		projects, _ := a.controller.ListProjects(r.Context(), org)
 
 		v := parseIssueFields(r)
-		projects, _ := a.controller.ListProjects(r.Context(), user)
 
 		if err := a.controller.UpdateIssue(r.Context(), user, issueUUID, v); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			default:
 				w.Header().Set("X-Error", "Failed to update issue")
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Failed to update issue")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "Failed to update issue")
 				return
 			}
 		}
@@ -699,28 +1145,28 @@ func (a api) submitIssue() http.HandlerFunc {
 		if err := a.controller.SubmitIssue(r.Context(), user, issueUUID); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			case errors.Is(err, ErrIssueIncomplete):
 				w.Header().Set("X-Error", "Cannot submit: missing required fields")
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Cannot submit: missing required fields")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "Cannot submit: missing required fields")
 				return
 			default:
 				w.Header().Set("X-Error", "Failed to submit issue")
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "Failed to submit issue")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "Failed to submit issue")
 				return
 			}
 		}
 
 		withSuccessToast(w)
-		a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+		a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 	}
 }
 
-func (a api) deleteIssue() http.HandlerFunc {
+func (a api) ignoreIssue() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := UserFromContext(r.Context())
 		if !ok {
@@ -729,32 +1175,37 @@ func (a api) deleteIssue() http.HandlerFunc {
 		}
 
 		issueUUID := r.PathValue("id")
-		projects, _ := a.controller.ListProjects(r.Context(), user)
+		org, err := a.issueOrg(r.Context(), user, issueUUID)
+		if err != nil {
+			WriteError(w, "issue not found", http.StatusNotFound, nil)
+			return
+		}
+		projects, _ := a.controller.ListProjects(r.Context(), org)
 
-		if err := a.controller.DeleteIssue(r.Context(), user, issueUUID); err != nil {
+		if err := a.controller.IgnoreIssue(r.Context(), user, issueUUID); err != nil {
 			switch {
 			case errors.Is(err, ErrIssueSubmitted):
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 				return
-			case errors.Is(err, ErrIssueDeleted):
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+			case errors.Is(err, ErrIssueIgnored):
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 				return
 			case errors.Is(err, ErrIssueNotFound), errors.Is(err, ErrParentDoesNotBelongToUser):
 				WriteError(w, "issue not found", http.StatusNotFound, nil)
 				return
 			default:
-				w.Header().Set("X-Error", "Failed to delete issue")
-				a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+				w.Header().Set("X-Error", "Failed to ignore issue")
+				a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "Failed to ignore issue")
 				return
 			}
 		}
 
 		withSuccessToast(w)
-		a.renderIssueCard(r.Context(), w, user, issueUUID, projects, "")
+		a.renderIssueCard(r.Context(), w, user, org, issueUUID, projects, "")
 	}
 }
 
-func (c components) Page(body g.Node) g.Node {
+func (c components) Page(isAdmin bool, body g.Node) g.Node {
 	return co.HTML5(
 		co.HTML5Props{
 			Title:       "Meetings",
@@ -769,7 +1220,7 @@ func (c components) Page(body g.Node) g.Node {
 			Body: []g.Node{
 				h.Div(
 					h.Class("w-screen h-screen flex"),
-					c.Sidebar(),
+					c.Sidebar(isAdmin),
 					h.Main(
 						h.Class("flex-1 overflow-auto p-6"),
 						body,
@@ -784,13 +1235,19 @@ func (c components) Page(body g.Node) g.Node {
 	)
 }
 
+func (a api) page(w http.ResponseWriter, r *http.Request, body g.Node) {
+	user, ok := UserFromContext(r.Context())
+	isAdmin := ok && user.IsAdmin
+	a.components.Page(isAdmin, body).Render(w)
+}
+
 type navLink struct {
 	label string
 	href  string
 	icon  g.Node
 }
 
-func (c components) Sidebar() g.Node {
+func (c components) Sidebar(isAdmin bool) g.Node {
 	groups := [][]navLink{
 		{
 			{label: "Home", href: c.endpoints.root.Path(), icon: solid.Home(h.Class("h-5 w-5 shrink-0"))},
@@ -804,6 +1261,14 @@ func (c components) Sidebar() g.Node {
 			{label: "New batch", href: c.endpoints.newBatch.Path(), icon: solid.ArrowUpTray(h.Class("h-5 w-5 shrink-0"))},
 			{label: "Batches", href: c.endpoints.batches.Path(), icon: solid.CircleStack(h.Class("h-5 w-5 shrink-0"))},
 		},
+	}
+
+	if isAdmin {
+		groups = append(groups, []navLink{
+			{label: "New organization", href: c.endpoints.adminNewOrganization.Path(), icon: solid.BuildingOffice2(h.Class("h-5 w-5 shrink-0"))},
+			{label: "Organizations", href: c.endpoints.adminOrganizations.Path(), icon: solid.CircleStack(h.Class("h-5 w-5 shrink-0"))},
+			{label: "Models", href: c.endpoints.adminModels.Path(), icon: solid.Cube(h.Class("h-5 w-5 shrink-0"))},
+		})
 	}
 
 	navBlocks := []g.Node{}
@@ -1072,10 +1537,355 @@ func promptStatusDisplay(status PromptStatus) (string, string) {
 	}
 }
 
+// admin components
+
+func (c components) AdminOrganizationsPage(orgs []AdminOrganizationView) g.Node {
+	rows := []g.Node{}
+	for _, o := range orgs {
+		path := strings.Replace(c.endpoints.adminOrganization.Path(), "{id}", o.ID, 1)
+		rows = append(rows,
+			h.A(
+				h.Href(path),
+				h.Class("flex justify-between items-center border rounded px-4 py-3 hover:bg-gray-50"),
+				h.Div(
+					h.Div(h.Class("font-medium"), g.Text(o.Name)),
+					h.Div(h.Class("text-sm text-gray-500"), g.Text(o.APIURL)),
+				),
+				h.Span(h.Class("text-sm text-gray-500"), g.Text(strconv.Itoa(len(o.Users))+" users")),
+			),
+		)
+	}
+
+	nodes := []g.Node{
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("Organizations")),
+		h.A(
+			h.Href(c.endpoints.adminNewOrganization.Path()),
+			h.Class("inline-block mb-4 text-blue-700 hover:underline"),
+			g.Text("+ New organization"),
+		),
+	}
+	if len(rows) == 0 {
+		nodes = append(nodes, h.P(h.Class("text-gray-500"), g.Text("No organizations yet.")))
+	} else {
+		nodes = append(nodes, h.Div(h.Class("flex flex-col gap-2"), g.Group(rows)))
+	}
+
+	return h.Div(g.Group(nodes))
+}
+
+func (c components) AdminNewOrganizationPage(validationErrors []string) g.Node {
+	nodes := []g.Node{}
+
+	if len(validationErrors) > 0 {
+		items := []g.Node{}
+		for _, m := range validationErrors {
+			items = append(items, h.Li(g.Text(m)))
+		}
+		nodes = append(nodes,
+			h.Div(
+				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3 max-w-2xl"),
+				h.H2(h.Class("font-semibold mb-1"), g.Text("Organization could not be created")),
+				h.Ul(g.Group(items)),
+			),
+		)
+	}
+
+	nodes = append(nodes,
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("New organization")),
+		h.Form(
+			htmx.Post(c.endpoints.adminCreateOrganization.Path()),
+			h.Class("space-y-6 max-w-2xl"),
+			g.Attr("hx-status:4xx", "swap:none"),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Name")),
+				h.Input(h.Name("name"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove API URL")),
+				h.Input(h.Name("api_url"), h.Type("url"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+				h.P(h.Class("text-sm text-gray-500"), g.Text("Base URL of the Projektove API, e.g. https://api.projektove.com/api")),
+			),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove Browser URL")),
+				h.Input(h.Name("browser_url"), h.Type("url"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+				h.P(h.Class("text-sm text-gray-500"), g.Text("Base URL of the Projektove web UI, e.g. https://projektove.com")),
+			),
+			c.CreateButton(h.Type("submit")),
+		),
+	)
+
+	return h.Div(g.Group(nodes))
+}
+
+func (c components) AdminOrganizationPage(view AdminOrganizationView) g.Node {
+	return h.Div(
+		h.A(
+			h.Href(c.endpoints.adminOrganizations.Path()),
+			h.Class("inline-block mb-2 text-gray-500 hover:underline text-sm"),
+			g.Text("<- Organizations"),
+		),
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("Organization: "+view.Name)),
+		c.AdminOrgDetailsForm(view, nil),
+		c.AdminOrgUsersList(view.Users, view.ID),
+	)
+}
+
+func (c components) AdminOrgDetailsForm(view AdminOrganizationView, validationErrors []string) g.Node {
+	nodes := []g.Node{}
+
+	if len(validationErrors) > 0 {
+		items := []g.Node{}
+		for _, m := range validationErrors {
+			items = append(items, h.Li(g.Text(m)))
+		}
+		nodes = append(nodes,
+			h.Div(
+				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3"),
+				h.H2(h.Class("font-semibold mb-1"), g.Text("Organization could not be updated")),
+				h.Ul(g.Group(items)),
+			),
+		)
+	}
+
+	path := strings.Replace(c.endpoints.adminUpdateOrganization.Path(), "{id}", view.ID, 1)
+
+	nodes = append(nodes,
+		h.Form(
+			htmx.Put(path),
+			htmx.Target("this"),
+			htmx.Swap("outerHTML"),
+			h.Class("space-y-6 max-w-2xl mb-8"),
+			g.Attr("hx-status:4xx", "swap:none"),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove API URL")),
+				h.Input(h.Name("api_url"), h.Type("url"), h.Value(view.APIURL), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove Browser URL")),
+				h.Input(h.Name("browser_url"), h.Type("url"), h.Value(view.BrowserURL), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			c.SaveButton(h.Type("submit")),
+		),
+	)
+
+	return h.Div(h.ID("admin-org-form"), g.Group(nodes))
+}
+
+func (c components) AdminOrgUsersList(users []ProjektoveOrganizationUser, orgUUID string) g.Node {
+	rows := []g.Node{}
+	for _, u := range users {
+		removePath := strings.Replace(strings.Replace(c.endpoints.adminRemoveOrgUser.Path(), "{id}", orgUUID, 1), "{uid}", u.UUID, 1)
+		rows = append(rows,
+			h.Tr(
+				h.Td(h.Class("py-2 px-3"), g.Text(u.Name)),
+				h.Td(h.Class("py-2 px-3"), g.Text(strconv.Itoa(u.ProjektoveID))),
+				h.Td(h.Class("py-2 px-3 text-right"),
+					c.DeleteButton(
+						h.Type("button"),
+						htmx.Delete(removePath),
+						htmx.Target("#org-users-list"),
+						htmx.Swap("outerHTML"),
+						htmx.Confirm("Remove "+u.Name+" from this organization?"),
+					),
+				),
+			),
+		)
+	}
+
+	addPath := strings.Replace(c.endpoints.adminAddOrgUser.Path(), "{id}", orgUUID, 1)
+
+	return h.Div(
+		h.ID("org-users-list"),
+		h.Class("space-y-4 max-w-2xl"),
+		h.H2(h.Class("text-lg font-semibold"), g.Text("Organization users")),
+		h.Form(
+			h.ID("add-org-user-form"),
+			h.Method("post"),
+			htmx.Post(addPath),
+			htmx.Target("#org-users-list"),
+			htmx.Swap("outerHTML"),
+			htmx.On("htmx:after:request", "this.reset()"),
+			h.Class("flex gap-2 items-end"),
+			h.Div(
+				h.Class("space-y-1 flex-1"),
+				h.Label(h.Class("block text-xs font-medium"), g.Text("Name")),
+				h.Input(h.Name("name"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			h.Div(
+				h.Class("space-y-1"),
+				h.Label(h.Class("block text-xs font-medium"), g.Text("Projektove ID")),
+				h.Input(h.Name("projektove_id"), h.Type("number"), h.Min("1"), h.Required(), h.Class("w-full px-3 py-2 border rounded")),
+			),
+			c.AddButton("Add user", h.Type("submit")),
+		),
+		h.Div(
+			h.Class("border rounded overflow-hidden"),
+			h.Table(
+				h.Class("w-full text-sm"),
+				h.THead(
+					h.Tr(
+						h.Th(h.Class("text-left py-2 px-3 bg-gray-50"), g.Text("Name")),
+						h.Th(h.Class("text-left py-2 px-3 bg-gray-50"), g.Text("Projektove ID")),
+						h.Th(h.Class("py-2 px-3 bg-gray-50")),
+					),
+				),
+				h.TBody(g.Group(rows)),
+			),
+		),
+	)
+}
+
+func (c components) AdminModelsPage(providers []Provider, models []Model, validationErrors []string) g.Node {
+	nodes := []g.Node{
+		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("Models")),
+	}
+
+	if len(validationErrors) > 0 {
+		items := []g.Node{}
+		for _, m := range validationErrors {
+			items = append(items, h.Li(g.Text(m)))
+		}
+		nodes = append(nodes,
+			h.Div(
+				h.Class("border border-red-300 bg-red-50 text-red-800 rounded px-4 py-3 max-w-2xl mb-6"),
+				h.H2(h.Class("font-semibold mb-1"), g.Text("Model could not be created")),
+				h.Ul(g.Group(items)),
+			),
+		)
+	}
+
+	nodes = append(nodes,
+		c.AdminModelsContent(providers, models),
+	)
+
+	return h.Div(g.Group(nodes))
+}
+
+func (c components) AdminModelsContent(providers []Provider, models []Model) g.Node {
+	return h.Div(
+		h.ID("admin-models-content"),
+		h.Class("space-y-6 w-full max-w-2xl"),
+		c.AdminProviderForm(),
+		c.AdminModelsForm(providers),
+		c.AdminModelsList(providers, models),
+	)
+}
+func (c components) AdminProviderForm() g.Node {
+	return h.Form(
+		h.ID("add-provider-form"),
+		h.Method("post"),
+		htmx.Post(c.endpoints.adminCreateProvider.Path()),
+		htmx.Target("#admin-models-content"),
+		htmx.Swap("outerHTML"),
+		h.Class("flex gap-2 items-end w-full"),
+		h.Div(
+			h.Class("space-y-1 flex-1"),
+			h.Label(h.Class("block text-sm font-medium"), g.Text("New provider")),
+			h.Input(h.Name("provider"), h.Placeholder("e.g. openai"), h.Required(), h.Class("w-full h-10 px-3 py-2 text-sm leading-none border rounded box-border")),
+		),
+		c.AddButton("Add", h.Type("submit")),
+	)
+}
+
+func (c components) AdminModelsForm(providers []Provider) g.Node {
+	opts := []g.Node{}
+	for _, p := range providers {
+		opts = append(opts, h.Option(h.Value(p.Provider), g.Text(p.Provider)))
+	}
+	if len(opts) == 0 {
+		opts = append(opts, h.Option(h.Value(""), h.Disabled(), g.Text("No providers yet")))
+	} else {
+		opts = append([]g.Node{h.Option(h.Value(""), h.Disabled(), h.Selected(), g.Text("Select provider"))}, opts...)
+	}
+
+	return h.Form(
+		h.ID("add-model-form"),
+		h.Method("post"),
+		htmx.Post(c.endpoints.adminCreateModel.Path()),
+		htmx.Target("#admin-models-list"),
+		htmx.Swap("outerHTML"),
+		htmx.On("htmx:after:request", "this.reset()"),
+		h.Class("flex gap-2 items-end w-full"),
+		h.Div(
+			h.Class("flex gap-2 items-end w-full grid grid-cols-[1fr_1fr_auto]"),
+			h.Div(
+				h.Class("space-y-1"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Provider")),
+				h.Select(h.Name("provider"), h.Required(), h.Class("h-10 px-3 py-2 text-sm leading-none border rounded w-full box-border bg-white"), g.Group(opts)),
+			),
+			h.Div(
+				h.Class("space-y-1"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Model")),
+				h.Input(h.Name("model"), h.Placeholder("e.g. gpt-4o"), h.Required(), h.Class("w-full h-10 px-3 py-2 text-sm leading-none border rounded box-border")),
+			),
+			c.AddButton("Add", h.Type("submit")),
+		),
+	)
+}
+
+func (c components) AdminModelsList(providers []Provider, models []Model) g.Node {
+	nodes := []g.Node{}
+
+	if len(providers) == 0 {
+		nodes = append(nodes, h.P(h.Class("text-gray-500"), g.Text("No providers yet.")))
+	} else {
+		providerItems := []g.Node{}
+		for _, p := range providers {
+			providerItems = append(providerItems, h.Span(h.Class("border rounded px-3 py-1 text-sm"), g.Text(p.Provider)))
+		}
+		nodes = append(nodes,
+			h.H2(h.Class("text-lg font-semibold mb-2"), g.Text("Providers")),
+			h.Div(h.Class("flex flex-wrap gap-2 mb-6"), g.Group(providerItems)),
+		)
+	}
+
+	if len(models) == 0 {
+		nodes = append(nodes, h.P(h.Class("text-gray-500"), g.Text("No models yet.")))
+	} else {
+		rows := []g.Node{}
+		for _, m := range models {
+			rows = append(rows,
+				h.Tr(
+					h.Td(h.Class("py-2 px-3"), g.Text(m.Provider)),
+					h.Td(h.Class("py-2 px-3"), g.Text(m.Model)),
+				),
+			)
+		}
+		nodes = append(nodes,
+			h.H2(h.Class("text-lg font-semibold mb-2"), g.Text("Models")),
+			h.Div(
+				h.Class("border rounded overflow-hidden max-w-2xl"),
+				h.Table(
+					h.Class("w-full text-sm"),
+					h.THead(
+						h.Tr(
+							h.Th(h.Class("text-left py-2 px-3 bg-gray-50"), g.Text("Provider")),
+							h.Th(h.Class("text-left py-2 px-3 bg-gray-50"), g.Text("Model")),
+						),
+					),
+					h.TBody(g.Group(rows)),
+				),
+			),
+		)
+	}
+
+	return h.Div(h.ID("admin-models-list"), h.Class("space-y-4"), g.Group(nodes))
+}
+
 func (c components) UserPage(profile UserProfileView) g.Node {
 	modelRows := []g.Node{}
 	for _, m := range profile.Models {
-		modelRows = append(modelRows, c.ModelRow(LLMModelView{Provider: m.Provider, Model: m.Model, Token: m.Token}))
+		modelRows = append(modelRows, c.ModelRow(UserModelView{ID: m.ID, Provider: m.Provider, Model: m.Model, Token: m.Token}))
+	}
+
+	orgRows := []g.Node{}
+	for _, o := range profile.Organizations {
+		orgRows = append(orgRows, c.OrgRow(o))
 	}
 
 	return h.Div(
@@ -1085,18 +1895,15 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 			h.ID("user-form"),
 			h.Method("post"),
 			htmx.Put(c.endpoints.updateUser.Path()),
-			htmx.Swap("none"),
+			htmx.Target("#user-add-forms"),
+			htmx.Swap("outerHTML"),
 			h.Class("space-y-6"),
 
 			h.Div(
 				h.Class("space-y-2"),
-				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove token")),
-				h.Input(
-					h.Type("text"),
-					h.Name("projektove_token"),
-					h.Value(profile.ProjektoveToken),
-					h.Class("w-full px-3 py-2 border rounded"),
-				),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove organizations")),
+				h.P(h.Class("text-sm text-gray-500"), g.Text("Set the API token for each organization you belong to.")),
+				h.Div(h.ID("organizations-list"), h.Class("space-y-2"), g.Group(orgRows)),
 			),
 
 			h.Div(
@@ -1109,19 +1916,7 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 			c.SaveButton(h.Type("submit")),
 		),
 
-		h.Form(
-			h.ID("add-model-form"),
-			h.Method("post"),
-			htmx.Post(c.endpoints.addLLMModel.Path()),
-			htmx.Target("#models-list"),
-			htmx.Swap("beforeend"),
-			htmx.On("htmx:after:request", "this.reset()"),
-			h.Class("grid grid-rows-4 lg:grid-cols-[1fr_1fr_1fr_auto] gap-2 mt-4"),
-			h.Select(h.Name("provider"), h.Placeholder("provider"), h.Class("px-2 py-1 border rounded"), h.Required(), h.Option(h.Value("googleai"), g.Text("google"))),
-			h.Input(h.Type("text"), h.Name("model"), h.Placeholder("model"), h.Class("px-2 py-1 border rounded"), h.Required()),
-			h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
-			c.AddButton("Add model", h.Type("submit")),
-		),
+		c.userAddForms(profile),
 
 		h.Hr(h.Class("my-8")),
 
@@ -1151,6 +1946,78 @@ func (c components) UserPage(profile UserProfileView) g.Node {
 	)
 }
 
+func (c components) userAddForms(profile UserProfileView) g.Node {
+	modelOpts := []g.Node{}
+	linkedModels := map[string]bool{}
+	for _, m := range profile.Models {
+		linkedModels[m.Provider+"/"+m.Model] = true
+	}
+	for _, m := range profile.AvailableModels {
+		label := m.Provider + "/" + m.Model
+		if linkedModels[label] {
+			continue
+		}
+		modelOpts = append(modelOpts, h.Option(h.Value(label), g.Text(label)))
+	}
+	if len(modelOpts) == 0 {
+		modelOpts = append(modelOpts, h.Option(h.Value(""), h.Disabled(), g.Text("No models available")))
+	} else {
+		modelOpts = append([]g.Node{h.Option(h.Value(""), h.Disabled(), h.Selected(), g.Text("Select model"))}, modelOpts...)
+	}
+
+	orgOpts := []g.Node{}
+	linkedOrgs := map[string]bool{}
+	for _, o := range profile.Organizations {
+		linkedOrgs[o.Name] = true
+	}
+	for _, o := range profile.AvailableOrganizations {
+		if linkedOrgs[o.Name] {
+			continue
+		}
+		orgOpts = append(orgOpts, h.Option(h.Value(o.Name), g.Text(o.Name)))
+	}
+	if len(orgOpts) == 0 {
+		orgOpts = append(orgOpts, h.Option(h.Value(""), h.Disabled(), g.Text("No organizations available")))
+	} else {
+		orgOpts = append([]g.Node{h.Option(h.Value(""), h.Disabled(), h.Selected(), g.Text("Select organization"))}, orgOpts...)
+	}
+
+	return h.Div(
+		h.ID("user-add-forms"),
+		h.Class("mt-5 space-y-4"),
+		h.Form(
+			h.ID("add-organization-form"),
+			h.Method("post"),
+			htmx.Post(c.endpoints.addOrganization.Path()),
+			htmx.Target("#organizations-list"),
+			htmx.Swap("beforeend"),
+			htmx.On("htmx:after:request", "this.reset()"),
+			h.P(h.Class("text-xs"), g.Text("Add Organization")),
+			h.Div(
+				h.Class("grid grid-rows-3 lg:grid-rows-1 lg:grid-cols-[1fr_1fr_auto] gap-2 items-end"),
+				h.Select(h.Name("organization"), h.Class("px-2 py-1 border rounded h-full"), h.Required(), g.Group(orgOpts)),
+				h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
+				h.Div(h.Class("flex justify-end"), c.AddButton("Add", h.Type("submit"))),
+			),
+		),
+		h.Form(
+			h.ID("add-model-form"),
+			h.Method("post"),
+			htmx.Post(c.endpoints.addLLMModel.Path()),
+			htmx.Target("#models-list"),
+			htmx.Swap("beforeend"),
+			htmx.On("htmx:after:request", "this.reset()"),
+			h.P(h.Class("text-xs"), g.Text("Add Model")),
+			h.Div(
+				h.Class("grid grid-rows-3 lg:grid-rows-1 lg:grid-cols-[1fr_1fr_auto] gap-2 items-end"),
+				h.Select(h.Name("model"), h.Class("px-2 py-1 border rounded h-full"), h.Required(), g.Group(modelOpts)),
+				h.Input(h.Type("text"), h.Name("token"), h.Placeholder("token"), h.Class("px-2 py-1 border rounded"), h.Required()),
+				h.Div(h.Class("flex justify-end"), c.AddButton("Add", h.Type("submit"))),
+			),
+		),
+	)
+}
+
 func (c components) contextRows(contexts []ContextView) []g.Node {
 	rows := []g.Node{}
 	for _, cx := range contexts {
@@ -1159,7 +2026,7 @@ func (c components) contextRows(contexts []ContextView) []g.Node {
 	return rows
 }
 
-func (c components) NewPromptPage(contexts []ContextView, models []LLMModel, validationErrors []string) g.Node {
+func (c components) NewPromptPage(contexts []ContextView, models []UserModel, orgs []UserProjektoveOrganization, validationErrors []string) g.Node {
 	nodes := []g.Node{}
 
 	if len(validationErrors) > 0 {
@@ -1178,9 +2045,13 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel, val
 
 	modelOpts := []g.Node{}
 	for _, m := range models {
-		value := string(m.Provider) + "|" + m.Model
-		label := string(m.Provider) + " / " + m.Model
-		modelOpts = append(modelOpts, h.Option(h.Value(value), g.Text(label)))
+		label := m.Provider + " / " + m.Model
+		modelOpts = append(modelOpts, h.Option(h.Value(m.UUID), g.Text(label)))
+	}
+
+	orgOpts := []g.Node{}
+	for _, o := range orgs {
+		orgOpts = append(orgOpts, h.Option(h.Value(o.UUID), g.Text(o.OrgName)))
 	}
 
 	contextOpts := []g.Node{}
@@ -1196,6 +2067,17 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel, val
 			h.Action(c.endpoints.createPrompt.Path()),
 			h.EncType("multipart/form-data"),
 			h.Class("space-y-6 max-w-2xl"),
+
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove organization")),
+				h.Select(
+					h.Name("organization"),
+					h.Required(),
+					h.Class("w-full px-3 py-2 border rounded"),
+					g.Group(orgOpts),
+				),
+			),
 
 			h.Div(
 				h.Class("space-y-2"),
@@ -1221,6 +2103,17 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel, val
 
 			h.Div(
 				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Prompt context (optional)")),
+				h.Textarea(
+					h.Name("prompt_context"),
+					h.Class("w-full px-3 py-2 border rounded"),
+					h.Placeholder("Additional context specific to this prompt..."),
+					h.Rows("3"),
+				),
+			),
+
+			h.Div(
+				h.Class("space-y-2"),
 				h.Label(h.Class("block text-sm font-medium"), g.Text("Meeting notes")),
 				h.Input(
 					h.Type("file"),
@@ -1238,7 +2131,7 @@ func (c components) NewPromptPage(contexts []ContextView, models []LLMModel, val
 	return h.Div(g.Group(nodes))
 }
 
-func (c components) NewBatchPage(validationErrors []string) g.Node {
+func (c components) NewBatchPage(orgs []UserProjektoveOrganization, validationErrors []string) g.Node {
 	nodes := []g.Node{}
 
 	if len(validationErrors) > 0 {
@@ -1255,6 +2148,11 @@ func (c components) NewBatchPage(validationErrors []string) g.Node {
 		)
 	}
 
+	orgOpts := []g.Node{}
+	for _, o := range orgs {
+		orgOpts = append(orgOpts, h.Option(h.Value(o.UUID), g.Text(o.OrgName)))
+	}
+
 	nodes = append(nodes,
 		h.H1(h.Class("text-2xl font-bold mb-6"), g.Text("New batch")),
 		h.Form(
@@ -1262,6 +2160,16 @@ func (c components) NewBatchPage(validationErrors []string) g.Node {
 			h.Action(c.endpoints.createBatch.Path()),
 			h.EncType("multipart/form-data"),
 			h.Class("space-y-6 max-w-2xl"),
+			h.Div(
+				h.Class("space-y-2"),
+				h.Label(h.Class("block text-sm font-medium"), g.Text("Projektove organization")),
+				h.Select(
+					h.Name("organization"),
+					h.Required(),
+					h.Class("w-full px-3 py-2 border rounded"),
+					g.Group(orgOpts),
+				),
+			),
 			h.Div(
 				h.Class("space-y-2"),
 				h.Label(h.Class("block text-sm font-medium"), g.Text("CSV table")),
@@ -1291,7 +2199,7 @@ func dateValue(t time.Time) string {
 	return t.Format("2006-01-02")
 }
 
-func (c components) PromptFragment(view PromptView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+func (c components) PromptFragment(view PromptView, projects []ProjectOptionView, users []ProjektoveUser, browserURL string) g.Node {
 	if view.Status.IsPending() {
 		return h.Div(
 			h.ID("prompt-view"),
@@ -1304,6 +2212,12 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 				h.Class("text-sm text-gray-500"),
 				g.Text("Context: "+view.ContextName),
 			),
+			g.If(view.PromptContext != "",
+				h.Div(
+					h.Class("text-sm text-gray-500"),
+					g.Text("Prompt context: "+view.PromptContext),
+				),
+			),
 			h.Div(
 				h.Class("flex items-center gap-3 text-gray-500 py-8"),
 				solid.ArrowPath(h.Class("h-5 w-5 animate-spin")),
@@ -1314,7 +2228,7 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 
 	issueCards := []g.Node{}
 	for _, iss := range view.Issues {
-		issueCards = append(issueCards, c.IssueCard(iss, projects, users))
+		issueCards = append(issueCards, c.IssueCard(iss, projects, users, browserURL))
 	}
 
 	nodes := []g.Node{
@@ -1324,6 +2238,12 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 			h.Div(
 				h.Class("text-sm text-gray-500"),
 				g.Text("Context: "+view.ContextName),
+			),
+			g.If(view.PromptContext != "",
+				h.Div(
+					h.Class("text-sm text-gray-500"),
+					g.Text("Prompt context: "+view.PromptContext),
+				),
 			),
 		),
 	}
@@ -1390,10 +2310,10 @@ func (c components) PromptFragment(view PromptView, projects []ProjectOptionView
 	return h.Div(h.ID("prompt-view"), h.Class("flex flex-col gap-4"), g.Group(nodes))
 }
 
-func (c components) BatchFragment(view BatchView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+func (c components) BatchFragment(view BatchView, projects []ProjectOptionView, users []ProjektoveUser, browserURL string) g.Node {
 	issueCards := []g.Node{}
 	for _, iss := range view.Issues {
-		issueCards = append(issueCards, c.IssueCard(iss, projects, users))
+		issueCards = append(issueCards, c.IssueCard(iss, projects, users, browserURL))
 	}
 
 	nodes := []g.Node{
@@ -1441,11 +2361,11 @@ func (c components) BatchFragment(view BatchView, projects []ProjectOptionView, 
 	return h.Div(h.ID("batch-view"), h.Class("flex flex-col gap-4"), g.Group(nodes))
 }
 
-func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users []ProjektoveUser) g.Node {
+func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users []ProjektoveUser, browserURL string) g.Node {
 	cardID := "issue-" + iss.ID
 
 	if !iss.Editable {
-		if iss.Status == IssueStatusDeleted {
+		if iss.Status == IssueStatusIgnored {
 			return h.Div(
 				h.ID(cardID),
 				h.Class("border rounded p-4 flex items-start justify-between"),
@@ -1455,8 +2375,8 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 				),
 				h.Div(
 					h.Class("flex items-center gap-2 text-gray-500 text-sm"),
-					solid.Trash(h.Class("h-5 w-5")),
-					g.Text("Deleted"),
+					solid.XMark(h.Class("h-5 w-5")),
+					g.Text("Ignored"),
 				),
 			)
 		}
@@ -1467,7 +2387,7 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 		})
 		meta := h.Span()
 		if iss.ProjektoveID != nil {
-			meta = h.A(h.Class("underline"), h.Target("_blank"), h.Href(fmt.Sprintf(c.projektoveIssueEndpoint, *iss.ProjektoveID)), g.Text("Projektove #"+strconv.Itoa(*iss.ProjektoveID)))
+			meta = h.A(h.Class("underline"), h.Target("_blank"), h.Href(browserURL+"/tasks/"+strconv.Itoa(*iss.ProjektoveID)), g.Text("Projektove #"+strconv.Itoa(*iss.ProjektoveID)))
 		}
 		return h.Div(
 			h.ID(cardID),
@@ -1514,7 +2434,7 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 
 	updatePath := strings.Replace(c.endpoints.updateIssue.Path(), "{id}", iss.ID, 1)
 	submitPath := strings.Replace(c.endpoints.submitIssue.Path(), "{id}", iss.ID, 1)
-	deletePath := strings.Replace(c.endpoints.deleteIssue.Path(), "{id}", iss.ID, 1)
+	ignorePath := strings.Replace(c.endpoints.ignoreIssue.Path(), "{id}", iss.ID, 1)
 	indicator := "#submit-indicator-" + iss.ID
 
 	return h.Form(
@@ -1574,12 +2494,12 @@ func (c components) IssueCard(iss IssueView, projects []ProjectOptionView, users
 				g.Text("Submitting..."),
 			),
 			h.Div(h.Class("flex-1")),
-			c.DeleteButton(
+			c.IgnoreButton(
 				h.Type("button"),
-				htmx.Delete(deletePath),
+				htmx.Put(ignorePath),
 				htmx.Target("#"+cardID),
 				htmx.Swap("outerHTML"),
-				htmx.Confirm("Delete this issue?"),
+				htmx.Confirm("Are you sure? This will mark the issue as ignored and will be exclude it from submission"),
 			),
 		),
 	)
@@ -1602,13 +2522,25 @@ func (c components) ContextRow(cx ContextView) g.Node {
 	)
 }
 
-func (c components) ModelRow(m LLMModelView) g.Node {
+func (c components) ModelRow(m UserModelView) g.Node {
 	return h.Div(
 		h.Class("model-row flex gap-2 items-center border rounded px-3 py-2 overflow-auto"),
-		h.Input(h.Type("text"), h.Name("model_provider"), h.Value(string(m.Provider)), h.Class("flex-1 px-2 py-1 border rounded")),
-		h.Input(h.Type("text"), h.Name("model_name"), h.Value(m.Model), h.Class("flex-1 px-2 py-1 border rounded")),
+		h.Input(h.Type("hidden"), h.Name("model_uuid"), h.Value(m.ID)),
+		h.Input(h.Type("hidden"), h.Name("model_provider"), h.Value(m.Provider)),
+		h.Input(h.Type("hidden"), h.Name("model_name"), h.Value(m.Model)),
+		h.Span(h.Class("flex-1 font-medium"), g.Text(fmt.Sprintf("%s / %s", m.Provider, m.Model))),
 		h.Input(h.Type("text"), h.Name("model_token"), h.Value(m.Token), h.Class("flex-1 px-2 py-1 border rounded")),
 		c.DeleteButton(h.Type("button"), g.Attr("onclick", "this.closest('.model-row').remove()")),
+	)
+}
+
+func (c components) OrgRow(o UserOrgView) g.Node {
+	return h.Div(
+		h.Class("org-row flex gap-2 items-center border rounded px-3 py-2 overflow-auto"),
+		h.Input(h.Type("hidden"), h.Name("org_uuid"), h.Value(o.ID)),
+		h.Input(h.Type("hidden"), h.Name("org_name"), h.Value(o.Name)),
+		h.Span(h.Class("flex-1 font-medium"), g.Text(o.Name)),
+		h.Input(h.Type("text"), h.Name("org_token"), h.Value(o.Token), h.Placeholder("token"), h.Class("flex-1 px-2 py-1 border rounded")),
 	)
 }
 
@@ -1641,10 +2573,17 @@ func (c components) DeleteButton(opts ...g.Node) g.Node {
 	)
 }
 
+func (c components) IgnoreButton(opts ...g.Node) g.Node {
+	return c.button(
+		baseButtonClass+"bg-yellow-700 hover:bg-yellow-800 text-white px-2 py-1 disabled:bg-yellow-300 disabled:hover:bg-yellow-300",
+		append(opts, solid.XMark(h.Class("h-4 w-4")), g.Text("Ignore"))...,
+	)
+}
+
 func (c components) CreateButton(opts ...g.Node) g.Node {
 	return c.button(
 		baseButtonClass+"bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 disabled:bg-gray-400 disabled:hover:bg-gray-400",
-		append(opts, solid.Sparkles(h.Class("h-4 w-4")), g.Text("Create issues"))...,
+		append(opts, solid.Sparkles(h.Class("h-4 w-4")), g.Text("Create"))...,
 	)
 }
 

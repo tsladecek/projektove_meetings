@@ -1,8 +1,6 @@
 package projektovemeeting
 
 import (
-	"fmt"
-	"strings"
 	"time"
 )
 
@@ -34,7 +32,7 @@ const (
 	IssueStatusCreated      IssueStatus = "created"
 	IssueStatusSubmitted    IssueStatus = "submitted"
 	IssueStatusSubmitFailed IssueStatus = "submit_failed"
-	IssueStatusDeleted      IssueStatus = "deleted"
+	IssueStatusIgnored      IssueStatus = "ignored"
 )
 
 type PromptStatus string
@@ -66,8 +64,8 @@ const (
 )
 
 type InferenceJob struct {
-	UserID   int `json:"user_id"`
-	PromptID int `json:"prompt_id"`
+	UserProjektoveOrganizationID int `json:"user_projektove_organization_id"`
+	PromptID                     int `json:"prompt_id"`
 }
 
 type TaskCreate struct {
@@ -119,10 +117,6 @@ type ProjektoveIssue struct {
 	Tracker     ProjektoveIssueTracker `json:"tracker"`
 }
 
-func (pi ProjektoveIssue) Link() string {
-	return fmt.Sprintf("https://app.projektove.cz/%s/tasks/%d", strings.ToLower(pi.Tracker.Name), pi.ID)
-}
-
 type ProjektoveIssueCreate struct {
 	Subject      string    `json:"subject"`
 	Description  string    `json:"description,omitempty"`
@@ -132,30 +126,61 @@ type ProjektoveIssueCreate struct {
 	AssignedToID int       `json:"assigned_to_id"`
 }
 
-type LLMModel struct {
+type Provider struct {
 	ID       int
-	Provider LLMProvider
+	Provider string
+}
+
+type Model struct {
+	ID         int
+	UUID       string
+	ProviderID int
+	Provider   string
+	Model      string
+}
+
+type UserModel struct {
+	ID       int
+	UUID     string
+	UserID   int
+	ModelID  int
+	Provider string
 	Model    string
 	Token    string
 }
 
-type User struct {
-	ID              int
-	IsAdmin         bool
-	Email           string
-	PasswordHash    *string
-	ProjektoveToken string
-	LLMModels       []LLMModel
+type ProjektoveOrganization struct {
+	ID         int
+	UUID       string
+	Name       string
+	APIURL     string
+	BrowserURL string
 }
 
-func (u User) GetModel(provider LLMProvider, model string) (LLMModel, bool) {
-	for _, m := range u.LLMModels {
-		if m.Provider == provider && m.Model == model {
-			return m, true
-		}
-	}
+type ProjektoveOrganizationUser struct {
+	ID             int
+	UUID           string
+	OrganizationID int
+	Name           string
+	ProjektoveID   int
+}
 
-	return LLMModel{}, false
+type UserProjektoveOrganization struct {
+	ID             int
+	UUID           string
+	UserID         int
+	OrganizationID int
+	Token          string
+	OrgName        string
+	APIURL         string
+	BrowserURL     string
+}
+
+type User struct {
+	ID           int
+	IsAdmin      bool
+	Email        string
+	PasswordHash *string
 }
 
 type Issue struct {
@@ -174,19 +199,22 @@ type Issue struct {
 }
 
 type Prompt struct {
-	ID              int
-	UUID            string
-	Prompt          string
-	Result          string
-	Error           string
-	Context         LLMContext
-	Status          PromptStatus
-	Provider        string
-	Model           string
-	FileContent     string
-	CreatedAt       time.Time
-	TotalIssues     int
-	SubmittedIssues int
+	ID                           int
+	UUID                         string
+	Prompt                       string
+	Result                       string
+	Error                        string
+	PromptContext                string
+	Context                      LLMContext
+	Status                       PromptStatus
+	ModelID                      int
+	Provider                     string
+	Model                        string
+	FileContent                  string
+	CreatedAt                    time.Time
+	UserProjektoveOrganizationID int
+	TotalIssues                  int
+	SubmittedIssues              int
 }
 
 type LLMContext struct {
@@ -197,10 +225,11 @@ type LLMContext struct {
 }
 
 type Batch struct {
-	ID              int
-	UUID            string
-	FileContent     string
-	CreatedAt       time.Time
-	TotalIssues     int
-	SubmittedIssues int
+	ID                           int
+	UUID                         string
+	FileContent                  string
+	CreatedAt                    time.Time
+	UserProjektoveOrganizationID int
+	TotalIssues                  int
+	SubmittedIssues              int
 }
