@@ -359,8 +359,14 @@
   .flex-1 {
     flex: 1;
   }
+  .flex-shrink {
+    flex-shrink: 1;
+  }
   .shrink-0 {
     flex-shrink: 0;
+  }
+  .border-collapse {
+    border-collapse: collapse;
   }
   .transform {
     transform: var(--tw-rotate-x,) var(--tw-rotate-y,) var(--tw-rotate-z,) var(--tw-skew-x,) var(--tw-skew-y,);
@@ -664,6 +670,10 @@
     --tw-shadow: 0 1px 3px 0 var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 1px 2px -1px var(--tw-shadow-color, rgb(0 0 0 / 0.1));
     box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
   }
+  .outline {
+    outline-style: var(--tw-outline-style);
+    outline-width: 1px;
+  }
   .blur {
     --tw-blur: blur(8px);
     filter: var(--tw-blur,) var(--tw-brightness,) var(--tw-contrast,) var(--tw-grayscale,) var(--tw-hue-rotate,) var(--tw-invert,) var(--tw-saturate,) var(--tw-sepia,) var(--tw-drop-shadow,);
@@ -680,20 +690,6 @@
     transition-property: color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to;
     transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
     transition-duration: var(--tw-duration, var(--default-transition-duration));
-  }
-  .hover\:cursor-default {
-    &:hover {
-      @media (hover: hover) {
-        cursor: default;
-      }
-    }
-  }
-  .hover\:cursor-none {
-    &:hover {
-      @media (hover: hover) {
-        cursor: none;
-      }
-    }
   }
   .hover\:bg-gray-50 {
     &:hover {
@@ -853,21 +849,6 @@
       grid-template-columns: repeat(4, minmax(0, 1fr));
     }
   }
-  .lg\:grid-cols-\[1fr_1fr_1fr_auto\] {
-    @media (width >= 64rem) {
-      grid-template-columns: 1fr 1fr 1fr auto;
-    }
-  }
-  .lg\:grid-cols-\[1fr_1fr_100px\] {
-    @media (width >= 64rem) {
-      grid-template-columns: 1fr 1fr 100px;
-    }
-  }
-  .lg\:grid-cols-\[1fr_1fr_150px\] {
-    @media (width >= 64rem) {
-      grid-template-columns: 1fr 1fr 150px;
-    }
-  }
   .lg\:grid-cols-\[1fr_1fr_auto\] {
     @media (width >= 64rem) {
       grid-template-columns: 1fr 1fr auto;
@@ -987,6 +968,11 @@
   inherits: false;
   initial-value: 0 0 #0000;
 }
+@property --tw-outline-style {
+  syntax: "*";
+  inherits: false;
+  initial-value: solid;
+}
 @property --tw-blur {
   syntax: "*";
   inherits: false;
@@ -1071,6 +1057,7 @@
       --tw-ring-offset-width: 0px;
       --tw-ring-offset-color: #fff;
       --tw-ring-offset-shadow: 0 0 #0000;
+      --tw-outline-style: solid;
       --tw-blur: initial;
       --tw-brightness: initial;
       --tw-contrast: initial;

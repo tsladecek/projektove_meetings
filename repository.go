@@ -436,9 +436,21 @@ func (r *RepositorySqlite) UpdateProjectsCache(ctx context.Context, org UserProj
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	_, execErr := r.DB.ExecContext(ctx, "INSERT INTO projects (user_projektove_organization_id, projects, fetched_at) VALUES (?, ?, ?)", org.ID, string(data), now)
+	result, execErr := r.DB.ExecContext(ctx, "UPDATE projects SET projects = ?, fetched_at = ? WHERE user_projektove_organization_id = ?", string(data), now, org.ID)
 	if execErr != nil {
 		return fmt.Errorf("failed to update projects cache: %w", execErr)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		_, execErr := r.DB.ExecContext(ctx, "INSERT INTO projects (user_projektove_organization_id, projects, fetched_at) VALUES (?, ?, ?)", org.ID, string(data), now)
+		if execErr != nil {
+			return fmt.Errorf("failed to update projects cache: %w", execErr)
+		}
 	}
 
 	return nil

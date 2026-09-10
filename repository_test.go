@@ -595,6 +595,19 @@ func TestUpdateAndListProjects(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, projects, entry.Projects)
 	assert.False(t, entry.FetchedAt.IsZero())
+
+	updated := []ProjektoveProject{{ID: 3, Name: "p3", Description: "d3"}}
+	require.NoError(t, repo.UpdateProjectsCache(t.Context(), org, updated))
+
+	entry, err = repo.ListProjects(t.Context(), org)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, updated, entry.Projects)
+
+	r, ok := repo.(*RepositorySqlite)
+	require.True(t, ok)
+	var count int
+	require.NoError(t, r.DB.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM projects WHERE user_projektove_organization_id = ?", org.ID).Scan(&count))
+	assert.Equal(t, 1, count, "cache updates should upsert, not insert")
 }
 
 func TestListProjects_NotFound(t *testing.T) {

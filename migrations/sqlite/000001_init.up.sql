@@ -126,3 +126,5 @@ CREATE TABLE IF NOT EXISTS issues (
     parent TEXT NOT NULL CHECK (parent IN ('prompt', 'batch')),
     parent_id INTEGER NOT NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_org ON projects(user_projektove_organization_id);

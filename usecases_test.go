@@ -11,11 +11,12 @@ import (
 )
 
 type fakeProjektove struct {
-	createResult   ProjektoveIssue
-	createErr      error
-	created        []ProjektoveIssueCreate
-	getProjectsRes []ProjektoveProject
-	getProjectsErr error
+	createResult    ProjektoveIssue
+	createErr       error
+	created         []ProjektoveIssueCreate
+	getProjectsRes  []ProjektoveProject
+	getProjectsErr  error
+	getProjectsCalls int
 }
 
 func (f *fakeProjektove) CreateIssue(ctx context.Context, token, baseURL string, obj ProjektoveIssueCreate) (ProjektoveIssue, error) {
@@ -27,6 +28,7 @@ func (f *fakeProjektove) CreateIssue(ctx context.Context, token, baseURL string,
 }
 
 func (f *fakeProjektove) GetProjects(ctx context.Context, token, baseURL string) ([]ProjektoveProject, error) {
+	f.getProjectsCalls++
 	return f.getProjectsRes, f.getProjectsErr
 }
 
@@ -1120,4 +1122,49 @@ func TestControllerCreateProvider(t *testing.T) {
 
 	err = c.CreateProvider(t.Context(), "")
 	assert.True(t, errors.Is(err, ErrInvalidArgument))
+}
+
+func TestControllerListProjects_UsesCache(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	org := storeOrg(t, repo, user)
+
+	projektove := &fakeProjektove{
+		getProjectsRes: []ProjektoveProject{{ID: 1, Name: "project-a"}, {ID: 2, Name: "project-b"}},
+	}
+	c := Controller{Repository: repo, Projektove: projektove}
+
+	first, err := c.ListProjects(t.Context(), org)
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	assert.Equal(t, 1, projektove.getProjectsCalls)
+
+	second, err := c.ListProjects(t.Context(), org)
+	require.NoError(t, err)
+	require.Len(t, second, 2)
+	assert.Equal(t, first, second)
+	assert.Equal(t, 1, projektove.getProjectsCalls, "second call should be served from cache")
+}
+
+func TestControllerListProjects_RefreshesAfterTTL(t *testing.T) {
+	repo := newRepository(t)
+	user := storeUser(t, repo, "user@email.com")
+	org := storeOrg(t, repo, user)
+
+	oldTTL := projectsCacheTTL
+	projectsCacheTTL = time.Nanosecond
+	defer func() { projectsCacheTTL = oldTTL }()
+
+	projektove := &fakeProjektove{
+		getProjectsRes: []ProjektoveProject{{ID: 1, Name: "project-a"}},
+	}
+	c := Controller{Repository: repo, Projektove: projektove}
+
+	_, err := c.ListProjects(t.Context(), org)
+	require.NoError(t, err)
+	assert.Equal(t, 1, projektove.getProjectsCalls)
+
+	_, err = c.ListProjects(t.Context(), org)
+	require.NoError(t, err)
+	assert.Equal(t, 2, projektove.getProjectsCalls, "stale cache should trigger a refetch")
 }

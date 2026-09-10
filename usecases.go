@@ -7,7 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 )
+
+// projectsCacheTTL controls how long a cached projects list is considered
+// fresh before it is refetched from the Projektove API.
+var projectsCacheTTL = 2 * time.Hour
 
 type Controller struct {
 	TxProvider     *TxProvider
@@ -30,7 +35,7 @@ func (c Controller) RunInference(ctx context.Context, job InferenceJob) error {
 		return nil
 	}
 
-	projects, err := c.Projektove.GetProjects(ctx, org.Token, org.APIURL)
+	projects, err := c.projects(ctx, org)
 	if err != nil {
 		c.failPrompt(ctx, org, job.PromptID, PromptComplete{}, fmt.Errorf("when listing projects: %w", err))
 		return err
@@ -409,10 +414,28 @@ func (c Controller) ListContexts(ctx context.Context, user User) ([]ContextView,
 	return views, nil
 }
 
-func (c Controller) ListProjects(ctx context.Context, org UserProjektoveOrganization) ([]ProjectOptionView, error) {
+func (c Controller) projects(ctx context.Context, org UserProjektoveOrganization) ([]ProjektoveProject, error) {
+	cached, err := c.Repository.ListProjects(ctx, org)
+	if err == nil && time.Since(cached.FetchedAt) < projectsCacheTTL {
+		return cached.Projects, nil
+	}
+
 	projects, err := c.Projektove.GetProjects(ctx, org.Token, org.APIURL)
 	if err != nil {
 		return nil, fmt.Errorf("when listing projects: %w", err)
+	}
+
+	if err := c.Repository.UpdateProjectsCache(ctx, org, projects); err != nil {
+		slog.Warn("Failed to update projects cache", "user_projektove_organization_id", org.ID, "err", err.Error())
+	}
+
+	return projects, nil
+}
+
+func (c Controller) ListProjects(ctx context.Context, org UserProjektoveOrganization) ([]ProjectOptionView, error) {
+	projects, err := c.projects(ctx, org)
+	if err != nil {
+		return nil, err
 	}
 
 	views := make([]ProjectOptionView, 0, len(projects))
@@ -578,7 +601,7 @@ func (c Controller) CreateBatch(ctx context.Context, user User, orgUserProjektov
 		return "", err
 	}
 
-	projects, err := c.Projektove.GetProjects(ctx, org.Token, org.APIURL)
+	projects, err := c.projects(ctx, org)
 	if err != nil {
 		return "", fmt.Errorf("when listing projects: %w", err)
 	}
