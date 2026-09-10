@@ -208,7 +208,7 @@ func TestLoginPage_RendersSSOButtonWhenOIDCConfigured(t *testing.T) {
 		},
 		repo:                 repo,
 		secretKey:            hmacKey[:],
-		baseURL:              baseURL.String(),
+		baseURL:              baseURL,
 		loginEndpoint:        NewEndpoint(http.MethodGet, baseURL.Path, "/login"),
 		authenticateEndpoint: NewEndpoint(http.MethodPost, baseURL.Path, "/login"),
 		logoutEndpoint:       NewEndpoint(http.MethodGet, baseURL.Path, "/logout"),
