@@ -287,7 +287,7 @@ type AuthComposite struct {
 	oidc                 *AuthOIDC
 	repo                 Repository
 	secretKey            []byte
-	baseURL              string
+	baseURL              *url.URL
 	loginEndpoint        Endpoint
 	authenticateEndpoint Endpoint
 	logoutEndpoint       Endpoint
@@ -318,7 +318,7 @@ func NewAuth(repo Repository, oidcConfig *ConfigOIDC, secretKey string, endpoint
 		oidc:                 oidcAuth,
 		repo:                 repo,
 		secretKey:            hmacKey[:],
-		baseURL:              baseURL.String(),
+		baseURL:              baseURL,
 		loginEndpoint:        endpointLogin,
 		logoutEndpoint:       endpointLogout,
 		authenticateEndpoint: NewEndpoint(http.MethodPost, baseURL.Path, endpointLogin.PathRaw()),
@@ -422,15 +422,17 @@ func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
 	m.HandleFunc(a.loginEndpoint.Pattern(), func(w http.ResponseWriter, r *http.Request) {
 		_, _, err := a.authenticate(w, r)
 		if err == nil {
-			http.Redirect(w, r, a.baseURL, http.StatusFound)
+			http.Redirect(w, r, a.baseURL.String(), http.StatusFound)
 			return
 		}
+
+		outputcss := a.baseURL.JoinPath("/static/css/output.css")
 
 		page := co.HTML5(
 			co.HTML5Props{
 				Title: "Sign in",
 				Head: []g.Node{
-					h.Link(h.Rel("stylesheet"), h.Href("/static/css/output.css")),
+					h.Link(h.Rel("stylesheet"), h.Href(outputcss.Path)),
 				},
 				Body: []g.Node{
 					h.Div(
@@ -539,7 +541,7 @@ func (a *AuthComposite) RegisterRoutes(m *http.ServeMux) {
 			MaxAge:   86400,
 		})
 
-		http.Redirect(w, r, a.baseURL, http.StatusFound)
+		http.Redirect(w, r, a.baseURL.String(), http.StatusFound)
 	})
 
 	// Self-login logout (clears session cookie)
