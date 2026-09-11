@@ -60,6 +60,7 @@ type endpoints struct {
 	listContexts Endpoint
 	createPrompt Endpoint
 	createBatch  Endpoint
+	listProjects Endpoint
 
 	updateIssue Endpoint
 	submitIssue Endpoint
@@ -121,6 +122,7 @@ func NewHandler(auth Auth, baseURL *url.URL, controller Controller, logoutEndpoi
 		listContexts: endAPI(http.MethodGet, "/contexts"),
 		createPrompt: endAPI(http.MethodPost, "/prompts"),
 		createBatch:  endAPI(http.MethodPost, "/batches"),
+		listProjects: endAPI(http.MethodGet, "/organizations/projects"),
 
 		updateIssue: endAPI(http.MethodPut, "/issues/{id}"),
 		submitIssue: endAPI(http.MethodPost, "/issues/{id}/submit"),
@@ -166,6 +168,7 @@ func NewHandler(auth Auth, baseURL *url.URL, controller Controller, logoutEndpoi
 		{endpoint: e.listContexts, handler: a.listContexts()},
 		{endpoint: e.createPrompt, handler: a.createPrompt()},
 		{endpoint: e.createBatch, handler: a.createBatch()},
+		{endpoint: e.listProjects, handler: a.listProjects()},
 		{endpoint: e.updateIssue, handler: a.updateIssue()},
 		{endpoint: e.submitIssue, handler: a.submitIssue()},
 		{endpoint: e.ignoreIssue, handler: a.ignoreIssue()},
@@ -404,7 +407,15 @@ func (a api) newBatch() http.HandlerFunc {
 			return
 		}
 
-		a.page(w, r, a.components.NewBatchPage(orgs, nil))
+		var projects []ProjectOptionView
+		if len(orgs) > 0 {
+			projects, err = a.controller.ListProjects(r.Context(), orgs[0])
+			if err != nil {
+				projects = []ProjectOptionView{}
+			}
+		}
+
+		a.page(w, r, a.components.NewBatchPage(orgs, projects, nil))
 	}
 }
 
@@ -975,25 +986,15 @@ func (a api) createBatch() http.HandlerFunc {
 		batchUUID, err := a.controller.CreateBatch(r.Context(), user, orgUUID, string(raw))
 		if err != nil {
 			if errors.Is(err, ErrProjektoveTokenNotConfigured) {
-				orgs, oErr := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
-				if oErr != nil {
-					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
-					return
-				}
-				a.page(w, r, a.components.NewBatchPage(orgs, []string{
+				a.renderNewBatchError(w, r, user, orgUUID, []string{
 					"The Projektove organization token is not configured. Set it on the User page before uploading a batch.",
-				}))
+				})
 				return
 			}
 
 			var csvErr *BatchCSVError
 			if errors.As(err, &csvErr) {
-				orgs, oErr := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
-				if oErr != nil {
-					WriteError(w, "failed to load organizations", http.StatusInternalServerError, oErr)
-					return
-				}
-				a.page(w, r, a.components.NewBatchPage(orgs, csvErr.Messages))
+				a.renderNewBatchError(w, r, user, orgUUID, csvErr.Messages)
 				return
 			}
 			WriteError(w, "failed to create batch", http.StatusInternalServerError, err)
@@ -1002,6 +1003,59 @@ func (a api) createBatch() http.HandlerFunc {
 
 		redirectPath := strings.Replace(a.components.endpoints.batch.Path(), "{id}", batchUUID, 1)
 		http.Redirect(w, r, redirectPath, http.StatusSeeOther)
+	}
+}
+
+func (a api) renderNewBatchError(w http.ResponseWriter, r *http.Request, user User, orgUUID string, validationErrors []string) {
+	orgs, err := a.controller.Repository.ListUserProjektoveOrganizations(r.Context(), user.ID)
+	if err != nil {
+		WriteError(w, "failed to load organizations", http.StatusInternalServerError, err)
+		return
+	}
+
+	var projects []ProjectOptionView
+	org, err := a.resolveUserOrg(r.Context(), user, orgUUID)
+	if err == nil {
+		projects, err = a.controller.ListProjects(r.Context(), org)
+		if err != nil {
+			projects = []ProjectOptionView{}
+		}
+	}
+
+	a.page(w, r, a.components.NewBatchPage(orgs, projects, validationErrors))
+}
+
+func (a api) listProjects() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			WriteError(w, "user not found", http.StatusUnauthorized, nil)
+			return
+		}
+
+		orgUUID := r.FormValue("organization")
+		if orgUUID == "" {
+			WriteError(w, "organization is required", http.StatusBadRequest, nil)
+			return
+		}
+
+		org, err := a.resolveUserOrg(r.Context(), user, orgUUID)
+		if err != nil {
+			if errors.Is(err, ErrOrganizationNotFound) {
+				WriteError(w, "organization not found", http.StatusNotFound, nil)
+				return
+			}
+			WriteError(w, "failed to resolve organization", http.StatusInternalServerError, err)
+			return
+		}
+
+		projects, err := a.controller.ListProjects(r.Context(), org)
+		if err != nil {
+			WriteError(w, "failed to list projects", http.StatusInternalServerError, err)
+			return
+		}
+
+		a.components.ProjectList(projects).Render(w)
 	}
 }
 
@@ -2131,7 +2185,7 @@ func (c components) NewPromptPage(contexts []ContextView, models []UserModel, or
 	return h.Div(g.Group(nodes))
 }
 
-func (c components) NewBatchPage(orgs []UserProjektoveOrganization, validationErrors []string) g.Node {
+func (c components) NewBatchPage(orgs []UserProjektoveOrganization, projects []ProjectOptionView, validationErrors []string) g.Node {
 	nodes := []g.Node{}
 
 	if len(validationErrors) > 0 {
@@ -2167,9 +2221,14 @@ func (c components) NewBatchPage(orgs []UserProjektoveOrganization, validationEr
 					h.Name("organization"),
 					h.Required(),
 					h.Class("w-full px-3 py-2 border rounded"),
+					htmx.Get(c.endpoints.listProjects.Path()),
+					htmx.Trigger("change"),
+					htmx.Target("#projects-list"),
+					htmx.Swap("outerHTML"),
 					g.Group(orgOpts),
 				),
 			),
+			c.ProjectList(projects),
 			h.Div(
 				h.Class("space-y-2"),
 				h.Label(h.Class("block text-sm font-medium"), g.Text("CSV table")),
@@ -2190,6 +2249,45 @@ func (c components) NewBatchPage(orgs []UserProjektoveOrganization, validationEr
 	)
 
 	return h.Div(g.Group(nodes))
+}
+
+func (c components) ProjectList(projects []ProjectOptionView) g.Node {
+	if len(projects) == 0 {
+		return h.Div(
+			h.ID("projects-list"),
+			h.Class("text-sm text-gray-500"),
+			g.Text("No projects found for the selected organization"),
+		)
+	}
+
+	rows := []g.Node{}
+	for _, p := range projects {
+		rows = append(rows,
+			h.Tr(
+				h.Td(h.Class("py-1.5 px-3"), g.Text(strconv.Itoa(p.ID))),
+				h.Td(h.Class("py-1.5 px-3"), g.Text(p.Name)),
+			),
+		)
+	}
+
+	return h.Div(
+		h.ID("projects-list"),
+		h.Class("space-y-2"),
+		h.P(h.Class("text-sm text-gray-500"), g.Text("Available projects (use these IDs in the \"Project\" column)")),
+		h.Div(
+			h.Class("border rounded overflow-hidden max-h-64 overflow-y-auto"),
+			h.Table(
+				h.Class("w-full text-sm"),
+				h.THead(
+					h.Tr(
+						h.Th(h.Class("text-left py-2 px-3 bg-gray-50"), g.Text("ID")),
+						h.Th(h.Class("text-left py-2 px-3 bg-gray-50"), g.Text("Name")),
+					),
+				),
+				h.TBody(g.Group(rows)),
+			),
+		),
+	)
 }
 
 func dateValue(t time.Time) string {
